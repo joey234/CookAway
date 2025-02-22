@@ -237,46 +237,50 @@ const VoiceInteraction: React.FC<VoiceInteractionProps> = ({ recipeId: initialRe
     if (timeRemaining !== null && timeRemaining > 0) {
       const timer = window.setInterval(() => {
         setTimeRemaining(prev => {
-          if (prev === null) return null
-          const newTime = prev - 1
+          if (prev === null) return null;
+          const newTime = prev - 1;
           
-          // Play warning sound at 10 seconds remaining
-          if (newTime === 10) {
-            const warningAudio = new Audio('/warning.mp3')
-            warningAudio.play()
+          // Play warning sound at 20 seconds remaining
+          if (newTime === 20) {
+            const warningAudio = new Audio('/warning.mp3');
+            warningAudio.play();
             toast({
               title: "Timer Warning",
-              description: "10 seconds remaining!",
+              description: "20 seconds remaining!",
               status: "warning",
-              duration: 3000,
-            })
+              duration: 5000,
+              isClosable: true,
+            });
           }
           
           // Timer complete
           if (newTime <= 0) {
-            const doneAudio = new Audio('/timer-done.mp3')
-            doneAudio.play()
+            const doneAudio = new Audio('/timer-done.mp3');
+            doneAudio.play();
             toast({
               title: "Timer Complete!",
               description: "Your timer has finished.",
               status: "success",
               duration: null,
               isClosable: true,
-            })
-            return null
+            });
+            
+            // Automatically start listening for next command after timer ends
+            startListening();
+            return null;
           }
           
-          return newTime
-        })
-      }, 1000)
+          return newTime;
+        });
+      }, 1000);
       
-      setActiveTimer(timer)
-      return () => window.clearInterval(timer)
+      setActiveTimer(timer);
+      return () => window.clearInterval(timer);
     } else if (activeTimer) {
-      window.clearInterval(activeTimer)
-      setActiveTimer(null)
+      window.clearInterval(activeTimer);
+      setActiveTimer(null);
     }
-  }, [timeRemaining])
+  }, [timeRemaining]);
 
   const addMessage = (type: 'user' | 'assistant', content: string, state?: ConversationState, timer?: Message['timer']) => {
     setMessages(prev => [...prev, {
@@ -481,10 +485,37 @@ const VoiceInteraction: React.FC<VoiceInteractionProps> = ({ recipeId: initialRe
   }
 
   const formatTime = (seconds: number): string => {
-    const minutes = Math.floor(seconds / 60)
-    const remainingSeconds = seconds % 60
-    return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
   }
+
+  // Add timer display component
+  const TimerDisplay = () => {
+    if (timeRemaining === null) return null;
+    
+    const timerColor = timeRemaining <= 20 ? "red.500" : "blue.500";
+    
+    return (
+      <Box 
+        textAlign="center" 
+        p={4} 
+        bg={timeRemaining <= 20 ? "red.50" : "blue.50"} 
+        borderRadius="lg"
+        border="2px"
+        borderColor={timerColor}
+      >
+        <Text fontSize="3xl" fontWeight="bold" color={timerColor}>
+          {formatTime(timeRemaining)}
+        </Text>
+        {timeRemaining <= 20 && (
+          <Text color="red.500" fontSize="lg" mt={2}>
+            Almost done! Get ready for the next step
+          </Text>
+        )}
+      </Box>
+    );
+  };
 
   return (
     <VStack spacing={4} align="stretch" h="100vh" p={4}>
@@ -495,11 +526,7 @@ const VoiceInteraction: React.FC<VoiceInteractionProps> = ({ recipeId: initialRe
         <Text fontSize="md" color="gray.600">
           {isListening ? "Listening..." : isPlaying ? "Playing audio response..." : "Ready for voice input"}
         </Text>
-        {timeRemaining !== null && (
-          <Text fontSize="xl" color="blue.600" fontWeight="bold" mt={2}>
-            Timer: {formatTime(timeRemaining)}
-          </Text>
-        )}
+        {timeRemaining !== null && <TimerDisplay />}
         {(isListening || isPlaying) && (
           <CircularProgress isIndeterminate size="40px" mt={2} color="blue.500" />
         )}

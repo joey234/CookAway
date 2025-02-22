@@ -27,7 +27,7 @@ def init_router(
     @router.post("/recipes/import", response_model=RecipeOutput)
     async def import_recipe(recipe_input: RecipeInput):
         try:
-            recipe = recipe_service.import_recipe(recipe_input.content, recipe_input.type)
+            recipe = await recipe_service.import_recipe(recipe_input.content, recipe_input.type)
             return RecipeOutput(
                 id=recipe.id,
                 title=recipe.title,

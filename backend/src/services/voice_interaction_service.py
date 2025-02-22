@@ -229,42 +229,15 @@ class VoiceInteractionService:
                 recipe_dict["metadata"]["current_step"] = current_step
                 next_step = steps[current_step - 1]
                 
-                response_text = f"Step {current_step}: {next_step['instruction']}"
-                
-                # Add checkpoints/tips if available
-                if next_step.get("checkpoints"):
-                    response_text += "\nImportant tips:\n"
-                    for checkpoint in next_step["checkpoints"]:
-                        response_text += f"- {checkpoint}\n"
-                
-                # Add timer information if available
-                if next_step.get("timer"):
-                    duration = next_step["timer"]["duration"]
-                    minutes = duration // 60
-                    seconds = duration % 60
-                    time_str = f"{minutes} minutes" if minutes > 0 else f"{seconds} seconds"
-                    response_text += f"\nThis step requires {time_str}. Would you like me to start a timer?"
+                # Build comprehensive step guidance
+                response_text = self._build_step_guidance(next_step, current_step)
                 
                 audio_data, response_text = self.tts_service.generate_voice_response(response_text, ConversationState.COOKING)
                 return audio_data, response_text, ConversationState.COOKING, recipe_dict, None
             
             # Handle "repeat" command
             elif "repeat" in transcript_lower:
-                response_text = f"Step {current_step}: {current_step_data['instruction']}"
-                
-                # Add checkpoints/tips if available
-                if current_step_data.get("checkpoints"):
-                    response_text += "\nImportant tips:\n"
-                    for checkpoint in current_step_data["checkpoints"]:
-                        response_text += f"- {checkpoint}\n"
-                
-                # Add timer information if available
-                if current_step_data.get("timer"):
-                    duration = current_step_data["timer"]["duration"]
-                    minutes = duration // 60
-                    seconds = duration % 60
-                    time_str = f"{minutes} minutes" if minutes > 0 else f"{seconds} seconds"
-                    response_text += f"\nThis step requires {time_str}. Would you like me to start a timer?"
+                response_text = self._build_step_guidance(current_step_data, current_step)
                 
                 audio_data, response_text = self.tts_service.generate_voice_response(response_text, ConversationState.COOKING)
                 return audio_data, response_text, ConversationState.COOKING, recipe_dict, None
@@ -274,7 +247,12 @@ class VoiceInteractionService:
                 timer_data = current_step_data["timer"]
                 recipe_dict["metadata"]["timer_running"] = True
                 
-                response_text = f"Starting timer for {timer_data['duration'] // 60} minutes and {timer_data['duration'] % 60} seconds."
+                duration = timer_data["duration"]
+                minutes = duration // 60
+                seconds = duration % 60
+                time_str = f"{minutes} minutes and {seconds} seconds" if minutes > 0 else f"{seconds} seconds"
+                
+                response_text = f"Starting timer for {time_str}. I'll remind you when there are 20 seconds left and when the timer is done."
                 audio_data, response_text = self.tts_service.generate_voice_response(response_text, ConversationState.COOKING)
                 
                 return audio_data, response_text, ConversationState.COOKING, recipe_dict, {
@@ -282,7 +260,7 @@ class VoiceInteractionService:
                         "duration": timer_data["duration"],
                         "type": timer_data["type"],
                         "step": current_step,
-                        "warning_time": 10  # 10 seconds before timer ends
+                        "warning_time": 20  # 20 seconds before timer ends
                     }
                 }
             
@@ -306,4 +284,36 @@ class VoiceInteractionService:
                 ConversationState.COOKING
             )
         
-        return audio_data, response_text, ConversationState.COOKING, recipe_dict, None 
+        return audio_data, response_text, ConversationState.COOKING, recipe_dict, None
+
+    def _build_step_guidance(self, step_data: Dict, step_number: int) -> str:
+        """Build comprehensive guidance for a cooking step."""
+        response_parts = [f"Step {step_number}: {step_data['instruction']}"]
+        
+        # Add checkpoints/visual cues
+        if step_data.get("checkpoints"):
+            response_parts.append("\nWhat to look for:")
+            for checkpoint in step_data["checkpoints"]:
+                response_parts.append(f"• {checkpoint}")
+        
+        # Add common mistakes to avoid (if available)
+        if step_data.get("warnings"):
+            response_parts.append("\nCommon mistakes to avoid:")
+            for warning in step_data["warnings"]:
+                response_parts.append(f"• {warning}")
+        
+        # Add notes (if available)
+        if step_data.get("notes"):
+            response_parts.append("\nHelpful tips:")
+            for note in step_data["notes"]:
+                response_parts.append(f"• {note}")
+        
+        # Add timer information if available
+        if step_data.get("timer"):
+            duration = step_data["timer"]["duration"]
+            minutes = duration // 60
+            seconds = duration % 60
+            time_str = f"{minutes} minutes" if minutes > 0 else f"{seconds} seconds"
+            response_parts.append(f"\nThis step takes {time_str}. Would you like me to start a timer?")
+        
+        return "\n".join(response_parts) 
