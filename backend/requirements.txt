@@ -2,8 +2,8 @@ fastapi==0.115.8
 uvicorn==0.34.0
 python-multipart==0.0.20
 python-dotenv==1.0.1
-mistralai==1.5.0
+mistralai>=0.0.7,<0.1.0
 elevenlabs==1.51.0
 pydantic==2.10.6
-httpx==0.28.1
+httpx>=0.25.2,<0.26.0
 websockets==15.0 

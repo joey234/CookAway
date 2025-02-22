@@ -1,4 +1,4 @@
-#!/Users/hungthinh/workspace/cookaway/backend/venv/bin/python3
+#!/Users/hungthinh/workspace/CookAway/backend/venv/bin/python3
 # -*- coding: utf-8 -*-
 import re
 import sys
