@@ -58,8 +58,8 @@ class RecipeSchema(BaseModel):
     equipment: List[str] = Field(description="Required kitchen equipment")
 
 class Recipe:
-    def __init__(self, title: str, metadata: dict, ingredients: list, steps: list, equipment: list):
-        self.id = str(uuid.uuid4())
+    def __init__(self, title: str, metadata: dict, ingredients: list, steps: list, equipment: list, id: str = None):
+        self.id = id if id else str(uuid.uuid4())
         self.title = title
         self.metadata = metadata
         self.ingredients = ingredients
@@ -335,8 +335,8 @@ class RecipeService:
             logger.error(f"Error processing recipe from URL: {e}", exc_info=True)
             raise ValueError(f"Error processing recipe from URL: {str(e)}")
 
-    def create_recipe(self, title: str, metadata: dict, ingredients: list, steps: list, equipment: list) -> Recipe:
-        recipe = Recipe(title, metadata, ingredients, steps, equipment)
+    def create_recipe(self, title: str, metadata: dict, ingredients: list, steps: list, equipment: list, id: str = None) -> Recipe:
+        recipe = Recipe(title, metadata, ingredients, steps, equipment, id)
         self._recipes[recipe.id] = recipe
         return recipe
 

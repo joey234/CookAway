@@ -16,24 +16,9 @@ class VoiceInteractionService:
 
     def process_servings_request(self, transcript: str, recipe_dict: Dict) -> Tuple[bytes, str, ConversationState, Dict]:
         """Process a request to change the number of servings."""
-        number_mapping = {
-            'one': '1', 'won': '1', 'juan': '1', 'a': '1',
-            'two': '2', 'too': '2', 'to': '2',
-            'three': '3', 'tree': '3',
-            'four': '4', 'for': '4',
-            'five': '5', 'fine': '5',
-            'six': '6', 'sex': '6',
-            'seven': '7',
-            'eight': '8', 'ate': '8',
-            'nine': '9',
-            'ten': '10'
-        }
+        numbers = re.findall(r'\d+', transcript)
+        logger.info(f"Processing servings request. Found numbers: {numbers}")
         
-        transcript_lower = transcript.lower()
-        for word, digit in number_mapping.items():
-            transcript_lower = transcript_lower.replace(word, digit)
-        
-        numbers = re.findall(r'\d+', transcript_lower)
         if numbers:
             new_servings = int(numbers[0])
             next_state = ConversationState.ASKING_SUBSTITUTION
@@ -42,8 +27,10 @@ class VoiceInteractionService:
             adjusted_recipe = self.tts_service.adjust_recipe_servings(recipe_dict, new_servings)
             adjusted_recipe["metadata"]["current_state"] = next_state
             
-            # Remove id field if present
-            adjusted_recipe.pop('id', None)
+            # Preserve the recipe ID if it exists
+            recipe_id = recipe_dict.get('id')
+            if recipe_id:
+                adjusted_recipe["id"] = recipe_id
             
             # Generate response and ensure it's ASCII-compatible
             audio_data, response_text = self.tts_service.generate_servings_response(adjusted_recipe, new_servings)
@@ -64,26 +51,27 @@ class VoiceInteractionService:
         """Process a request for ingredient substitution."""
         transcript_lower = transcript.lower()
         pending = recipe_dict.get("metadata", {}).get("pending_substitution")
+        has_made_substitutions = recipe_dict.get("metadata", {}).get("has_made_substitutions", False)
         
         # Check for "no" to further substitutions
         if any(word in transcript_lower for word in ["no", "nope", "nah", "good", "fine"]) and not pending:
             recipe_dict["metadata"]["current_state"] = ConversationState.READY_TO_COOK
             
-            # First, summarize the final ingredients list
-            ingredients_text = "Great! Here's your final list of ingredients:\n"
-            for ingredient in recipe_dict["ingredients"]:
-                if formatted := self.tts_service._format_ingredient(ingredient):
-                    ingredients_text += f"- {formatted}\n"
+            # Only show final ingredients if substitutions were made
+            if has_made_substitutions:
+                response_text = "Great! Here's your final list of ingredients with the substitutions:\n"
+                for ingredient in recipe_dict["ingredients"]:
+                    if formatted := self.tts_service._format_ingredient(ingredient):
+                        response_text += f"- {formatted}\n"
+                response_text += "\nNow, here's the equipment you'll need:\n"
+            else:
+                response_text = "Great! Here's the equipment you'll need:\n"
             
-            # Then add the equipment list
-            equipment_text = ingredients_text + "\nNow, here's the equipment you'll need:\n" + \
-                           "\n".join(f"- {item}" for item in recipe_dict["equipment"]) + \
-                           "\nDo you have all the equipment ready? Say 'ready' when you want to start cooking."
+            # Add equipment list
+            response_text += "\n".join(f"- {item}" for item in recipe_dict["equipment"])
+            response_text += "\nDo you have all the equipment ready? Say 'ready' when you want to start cooking."
             
-            # Remove id field if present
-            recipe_dict.pop('id', None)
-            
-            audio_data, response_text = self.tts_service.generate_voice_response(equipment_text, ConversationState.READY_TO_COOK)
+            audio_data, response_text = self.tts_service.generate_voice_response(response_text, ConversationState.READY_TO_COOK)
             response_text = response_text.encode('ascii', 'replace').decode('ascii')
             return audio_data, response_text, ConversationState.READY_TO_COOK, recipe_dict, None
         
@@ -152,8 +140,8 @@ class VoiceInteractionService:
                     chosen_option = pending["options"][index]
                     updated_recipe = self.substitution_service.apply_substitution(recipe_dict, chosen_option)
                     
-                    # Remove id field if present
-                    updated_recipe.pop('id', None)
+                    # Mark that substitutions have been made
+                    updated_recipe["metadata"]["has_made_substitutions"] = True
                     
                     response_text = f"I've updated the recipe to use {chosen_option['substitute']}. Do you need to substitute any other ingredients?"
                     audio_data, response_text = self.tts_service.generate_voice_response(response_text, ConversationState.ASKING_SUBSTITUTION)
@@ -203,11 +191,15 @@ class VoiceInteractionService:
         current_step = recipe_dict.get("metadata", {}).get("current_step", 0)
         timer_running = recipe_dict.get("metadata", {}).get("timer_running", False)
         steps = recipe_dict.get("steps", [])
-        
-        # Initialize current step if not set
-        if current_step == 0 and any(word in transcript_lower for word in ["start", "begin", "first"]):
+
+        # Handle start command
+        if any(word in transcript_lower for word in ["start", "begin", "first"]):
             current_step = 1
             recipe_dict["metadata"]["current_step"] = current_step
+            first_step = steps[current_step - 1]
+            response_text = self._build_step_guidance(first_step, current_step)
+            audio_data, response_text = self.tts_service.generate_voice_response(response_text, ConversationState.COOKING)
+            return audio_data, response_text, ConversationState.COOKING, recipe_dict, None
         
         # Handle timer-related commands
         if timer_running:
@@ -217,7 +209,13 @@ class VoiceInteractionService:
                     "Timer stopped. Would you like me to repeat the current step?",
                     ConversationState.COOKING
                 )
-                return audio_data, response_text, ConversationState.COOKING, recipe_dict, None
+                # Send a timer object with duration 0 to signal the frontend to stop the timer
+                return audio_data, response_text, ConversationState.COOKING, recipe_dict, {
+                    "duration": 0,
+                    "type": "stop",
+                    "step": current_step,
+                    "warning_time": 0
+                }
         
         # Handle step navigation
         if current_step > 0 and current_step <= len(steps):
@@ -247,7 +245,7 @@ class VoiceInteractionService:
                 timer_data = current_step_data["timer"]
                 recipe_dict["metadata"]["timer_running"] = True
                 
-                duration = timer_data["duration"]
+                duration = int(timer_data["duration"])  # Ensure duration is an integer
                 minutes = duration // 60
                 seconds = duration % 60
                 time_str = f"{minutes} minutes and {seconds} seconds" if minutes > 0 else f"{seconds} seconds"
@@ -256,12 +254,10 @@ class VoiceInteractionService:
                 audio_data, response_text = self.tts_service.generate_voice_response(response_text, ConversationState.COOKING)
                 
                 return audio_data, response_text, ConversationState.COOKING, recipe_dict, {
-                    "timer": {
-                        "duration": timer_data["duration"],
-                        "type": timer_data["type"],
-                        "step": current_step,
-                        "warning_time": 20  # 20 seconds before timer ends
-                    }
+                    "duration": duration,
+                    "type": timer_data["type"],
+                    "step": current_step,
+                    "warning_time": 20  # 20 seconds before timer ends
                 }
             
             # Handle completion

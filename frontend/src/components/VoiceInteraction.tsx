@@ -11,9 +11,14 @@ import {
   Avatar,
   Divider,
   Spacer,
+  HStack,
+  Input,
+  InputGroup,
+  InputRightElement,
+  IconButton,
 } from '@chakra-ui/react'
 import axios from 'axios'
-import { FaMicrophone, FaMicrophoneSlash } from 'react-icons/fa'
+import { FaMicrophone, FaMicrophoneSlash, FaPaperPlane } from 'react-icons/fa'
 
 interface VoiceInteractionProps {
   recipeId: string
@@ -73,18 +78,20 @@ declare global {
   }
 }
 
+interface TimerData {
+    duration: number;
+    type: string;
+    step: number;
+    warning_time: number;
+}
+
 interface Message {
-  id: string
-  type: 'user' | 'assistant'
-  content: string
-  timestamp: Date
-  state?: ConversationState
-  timer?: {
-    duration: number
-    type: string
-    step: number
-    warning_time: number
-  }
+    id: string
+    type: 'user' | 'assistant'
+    content: string
+    timestamp: Date
+    state?: ConversationState
+    timer?: TimerData
 }
 
 const VoiceInteraction: React.FC<VoiceInteractionProps> = ({ recipeId: initialRecipeId, onRecipeUpdate }) => {
@@ -103,6 +110,7 @@ const VoiceInteraction: React.FC<VoiceInteractionProps> = ({ recipeId: initialRe
   const currentStateRef = useRef<ConversationState>("initial_summary")
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const toast = useToast()
+  const [textInput, setTextInput] = useState("")
 
   // Scroll to bottom of messages
   const scrollToBottom = () => {
@@ -234,55 +242,65 @@ const VoiceInteraction: React.FC<VoiceInteractionProps> = ({ recipeId: initialRe
 
   // Handle timer updates
   useEffect(() => {
-    if (timeRemaining !== null && timeRemaining > 0) {
-      const timer = window.setInterval(() => {
-        setTimeRemaining(prev => {
-          if (prev === null) return null;
-          const newTime = prev - 1;
-          
-          // Play warning sound at 20 seconds remaining
-          if (newTime === 20) {
-            const warningAudio = new Audio('/warning.mp3');
-            warningAudio.play();
-            toast({
-              title: "Timer Warning",
-              description: "20 seconds remaining!",
-              status: "warning",
-              duration: 5000,
-              isClosable: true,
+    if (timeRemaining !== null) {
+        if (timeRemaining <= 0) {
+            // Clear timer when it reaches 0 or is stopped
+            setTimeRemaining(null);
+            if (activeTimer) {
+                window.clearInterval(activeTimer);
+                setActiveTimer(null);
+            }
+            return;
+        }
+
+        const timer = window.setInterval(() => {
+            setTimeRemaining(prev => {
+                if (prev === null) return null;
+                const newTime = prev - 1;
+                
+                // Play warning sound at 20 seconds remaining
+                if (newTime === 20) {
+                    const warningAudio = new Audio('/warning.mp3');
+                    warningAudio.play();
+                    toast({
+                        title: "Timer Warning",
+                        description: "20 seconds remaining!",
+                        status: "warning",
+                        duration: 5000,
+                        isClosable: true,
+                    });
+                }
+                
+                // Timer complete
+                if (newTime <= 0) {
+                    const doneAudio = new Audio('/timer-done.mp3');
+                    doneAudio.play();
+                    toast({
+                        title: "Timer Complete!",
+                        description: "Your timer has finished.",
+                        status: "success",
+                        duration: null,
+                        isClosable: true,
+                    });
+                    
+                    // Automatically start listening for next command after timer ends
+                    startListening();
+                    return null;
+                }
+                
+                return newTime;
             });
-          }
-          
-          // Timer complete
-          if (newTime <= 0) {
-            const doneAudio = new Audio('/timer-done.mp3');
-            doneAudio.play();
-            toast({
-              title: "Timer Complete!",
-              description: "Your timer has finished.",
-              status: "success",
-              duration: null,
-              isClosable: true,
-            });
-            
-            // Automatically start listening for next command after timer ends
-            startListening();
-            return null;
-          }
-          
-          return newTime;
-        });
-      }, 1000);
-      
-      setActiveTimer(timer);
-      return () => window.clearInterval(timer);
+        }, 1000);
+        
+        setActiveTimer(timer);
+        return () => window.clearInterval(timer);
     } else if (activeTimer) {
-      window.clearInterval(activeTimer);
-      setActiveTimer(null);
+        window.clearInterval(activeTimer);
+        setActiveTimer(null);
     }
   }, [timeRemaining]);
 
-  const addMessage = (type: 'user' | 'assistant', content: string, state?: ConversationState, timer?: Message['timer']) => {
+  const addMessage = (type: 'user' | 'assistant', content: string, state?: ConversationState, timer?: TimerData) => {
     setMessages(prev => [...prev, {
       id: Math.random().toString(36).substring(7),
       type,
@@ -423,12 +441,22 @@ const VoiceInteraction: React.FC<VoiceInteractionProps> = ({ recipeId: initialRe
       }
       
       // Handle timer data
-      let timer = null
+      let timer: TimerData | undefined = undefined
       if (timerDataJson) {
         try {
           const timerData = JSON.parse(decodeBase64Text(timerDataJson))
-          timer = timerData
-          setTimeRemaining(timerData.duration)
+          timer = {
+            duration: parseInt(timerData.duration),
+            type: String(timerData.type),
+            step: parseInt(timerData.step),
+            warning_time: parseInt(timerData.warning_time)
+          }
+          // Only set timeRemaining if it's not a stop signal
+          if (timer.duration > 0) {
+            setTimeRemaining(timer.duration)
+          } else {
+            setTimeRemaining(null)
+          }
         } catch (e) {
           console.error('Error parsing timer data:', e)
         }
@@ -490,173 +518,292 @@ const VoiceInteraction: React.FC<VoiceInteractionProps> = ({ recipeId: initialRe
     return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
   }
 
-  // Add timer display component
-  const TimerDisplay = () => {
-    if (timeRemaining === null) return null;
+  const handleTextSubmit = async (e?: React.FormEvent) => {
+    if (e) {
+      e.preventDefault()
+    }
+    if (!textInput.trim()) return
+
+    // Add user message
+    addMessage('user', textInput)
     
-    const timerColor = timeRemaining <= 20 ? "red.500" : "blue.500";
-    
-    return (
-      <Box 
-        textAlign="center" 
-        p={4} 
-        bg={timeRemaining <= 20 ? "red.50" : "blue.50"} 
-        borderRadius="lg"
-        border="2px"
-        borderColor={timerColor}
-      >
-        <Text fontSize="3xl" fontWeight="bold" color={timerColor}>
-          {formatTime(timeRemaining)}
-        </Text>
-        {timeRemaining <= 20 && (
-          <Text color="red.500" fontSize="lg" mt={2}>
-            Almost done! Get ready for the next step
-          </Text>
-        )}
-      </Box>
-    );
-  };
+    try {
+      setIsPlaying(true)
+      
+      const response = await axios.post(
+        `http://localhost:8000/api/recipes/${currentRecipeId}/voice-interaction`,
+        {
+          recipe_id: currentRecipeId,
+          transcript: textInput,
+          current_state: currentStateRef.current
+        },
+        { 
+          responseType: 'blob',
+          headers: {
+            'Accept': 'audio/mpeg, application/json',
+          }
+        }
+      )
+
+      const nextState = response.headers['x-next-state'] as ConversationState
+      const updatedRecipeId = response.headers['x-updated-recipe-id']
+      const encodedResponseText = response.headers['x-full-response']
+      const isResponseTextEncoded = response.headers['x-response-text-encoded'] === 'true'
+      const timerDataJson = response.headers['x-timer-data']
+      
+      // Decode response text if it's encoded
+      const responseText = encodedResponseText && isResponseTextEncoded
+        ? decodeBase64Text(encodedResponseText)
+        : encodedResponseText
+      
+      if (updatedRecipeId) {
+        setCurrentRecipeId(updatedRecipeId)
+        if (onRecipeUpdate) {
+          onRecipeUpdate(updatedRecipeId)
+        }
+      }
+      
+      // Handle timer data
+      let timer: TimerData | undefined = undefined
+      if (timerDataJson) {
+        try {
+          const timerData = JSON.parse(decodeBase64Text(timerDataJson))
+          timer = {
+            duration: parseInt(timerData.duration),
+            type: String(timerData.type),
+            step: parseInt(timerData.step),
+            warning_time: parseInt(timerData.warning_time)
+          }
+          // Only set timeRemaining if it's not a stop signal
+          if (timer.duration > 0) {
+            setTimeRemaining(timer.duration)
+          } else {
+            setTimeRemaining(null)
+          }
+        } catch (e) {
+          console.error('Error parsing timer data:', e)
+        }
+      }
+      
+      // Add assistant's response as a message
+      if (responseText) {
+        addMessage('assistant', responseText, nextState, timer)
+      }
+      
+      if (nextState && nextState !== currentStateRef.current) {
+        setCurrentState(nextState)
+      }
+
+      playAudioResponse(response.data)
+      setTextInput("") // Clear input after sending
+    } catch (error) {
+      console.error('Error processing text input:', error)
+      toast({
+        title: "Error",
+        description: "Failed to process text input. Please try again.",
+        status: "error",
+        duration: 3000,
+      })
+      setIsPlaying(false)
+    }
+  }
 
   return (
-    <VStack spacing={4} align="stretch" h="100vh" p={4}>
-      <Box textAlign="center" p={4} bg="blue.50" borderRadius="lg">
-        <Text fontSize="lg" fontWeight="bold" mb={2}>
-          Current State: {currentState.replace(/_/g, ' ').toUpperCase()}
-        </Text>
-        <Text fontSize="md" color="gray.600">
-          {isListening ? "Listening..." : isPlaying ? "Playing audio response..." : "Ready for voice input"}
-        </Text>
-        {timeRemaining !== null && <TimerDisplay />}
-        {(isListening || isPlaying) && (
-          <CircularProgress isIndeterminate size="40px" mt={2} color="blue.500" />
-        )}
-      </Box>
-
-      {/* Chat Messages */}
-      <Box
-        flex="1"
-        overflowY="auto"
-        borderRadius="lg"
-        borderWidth="1px"
-        borderColor="gray.200"
-        p={4}
-        bg="gray.50"
-      >
-        <VStack spacing={4} align="stretch">
-          {messages.map((message) => (
-            <Flex
-              key={message.id}
-              direction={message.type === 'user' ? 'row-reverse' : 'row'}
-              align="start"
-              gap={2}
-            >
-              <Avatar
-                size="sm"
-                name={message.type === 'user' ? 'User' : 'Assistant'}
-                bg={message.type === 'user' ? 'blue.500' : 'green.500'}
-              />
-              <Box
-                maxW="80%"
-                bg={message.type === 'user' ? 'blue.500' : 'white'}
-                color={message.type === 'user' ? 'white' : 'black'}
-                p={3}
-                borderRadius="lg"
-                boxShadow="sm"
-                position="relative"
-                _after={{
-                  content: '""',
-                  position: 'absolute',
-                  top: '10px',
-                  [message.type === 'user' ? 'right' : 'left']: '-8px',
-                  border: '8px solid transparent',
-                  borderRightColor: message.type === 'user' ? 'transparent' : 'white',
-                  borderLeftColor: message.type === 'user' ? 'blue.500' : 'transparent',
-                  transform: message.type === 'user' ? 'translateX(8px)' : 'translateX(-8px)'
-                }}
-              >
-                <Text whiteSpace="pre-wrap">{message.content}</Text>
-                <Text fontSize="xs" color={message.type === 'user' ? 'whiteAlpha.700' : 'gray.500'} mt={1}>
-                  {message.timestamp.toLocaleTimeString()}
-                </Text>
-                {message.timer && (
-                  <Text fontSize="sm" color="blue.600" mt={1}>
-                    Timer: {formatTime(message.timer.duration)}
-                  </Text>
-                )}
-              </Box>
-            </Flex>
-          ))}
-          <div ref={messagesEndRef} />
-        </VStack>
-      </Box>
-
-      <Divider />
-
-      {/* Voice Control Section */}
-      <Box p={4} bg="white" borderRadius="lg" shadow="sm">
-        <Button
-          colorScheme="blue"
-          size="lg"
-          width="full"
-          onClick={isListening ? stopListening : startListening}
-          isDisabled={isPlaying}
-          leftIcon={isListening ? <Icon as={FaMicrophoneSlash} /> : <Icon as={FaMicrophone} />}
+    <HStack spacing={4} align="stretch" h="100vh" p={4}>
+      {/* Left Column - Conversation */}
+      <Box flex="2" h="100%">
+        {/* Chat Messages */}
+        <Box
+          h="calc(100% - 120px)"  // Adjusted to leave space for input and button
+          overflowY="auto"
+          borderRadius="lg"
+          borderWidth="1px"
+          borderColor="gray.200"
+          p={4}
+          bg="gray.50"
+          mb={4}
         >
-          {isListening ? "Stop Listening" : "Start Listening"}
-        </Button>
-      </Box>
+          <VStack spacing={4} align="stretch">
+            {messages.map((message) => (
+              <Flex
+                key={message.id}
+                direction={message.type === 'user' ? 'row-reverse' : 'row'}
+                align="start"
+                gap={2}
+              >
+                <Avatar
+                  size="sm"
+                  name={message.type === 'user' ? 'User' : 'Assistant'}
+                  bg={message.type === 'user' ? 'blue.500' : 'green.500'}
+                />
+                <Box
+                  maxW="80%"
+                  bg={message.type === 'user' ? 'blue.500' : 'white'}
+                  color={message.type === 'user' ? 'white' : 'black'}
+                  p={3}
+                  borderRadius="lg"
+                  boxShadow="sm"
+                  position="relative"
+                  _after={{
+                    content: '""',
+                    position: 'absolute',
+                    top: '10px',
+                    [message.type === 'user' ? 'right' : 'left']: '-8px',
+                    border: '8px solid transparent',
+                    borderRightColor: message.type === 'user' ? 'transparent' : 'white',
+                    borderLeftColor: message.type === 'user' ? 'blue.500' : 'transparent',
+                    transform: message.type === 'user' ? 'translateX(8px)' : 'translateX(-8px)'
+                  }}
+                >
+                  <Text whiteSpace="pre-wrap">{message.content}</Text>
+                  <Text fontSize="xs" color={message.type === 'user' ? 'whiteAlpha.700' : 'gray.500'} mt={1}>
+                    {message.timestamp.toLocaleTimeString()}
+                  </Text>
+                  {message.timer && (
+                    <Text fontSize="sm" color="blue.600" mt={1}>
+                      Timer: {formatTime(message.timer.duration)}
+                    </Text>
+                  )}
+                </Box>
+              </Flex>
+            ))}
+            <div ref={messagesEndRef} />
+          </VStack>
+        </Box>
 
-      {/* Voice Command Guide */}
-      <Box p={4} bg="gray.50" borderRadius="lg" border="1px" borderColor="gray.200">
-        <Text fontWeight="bold" mb={2}>Voice Command Guide:</Text>
-        <VStack align="stretch" spacing={2}>
-          {currentState === "initial_summary" && (
-            <>
-              <Text fontSize="sm" color="blue.600" fontWeight="medium">Expected: Change serving size?</Text>
-              <Text fontSize="sm">• Say "yes" or "I want to make it for X people"</Text>
-              <Text fontSize="sm">• Say "no" to keep current serving size</Text>
-            </>
-          )}
-          
-          {currentState === "asking_servings" && (
-            <>
-              <Text fontSize="sm" color="blue.600" fontWeight="medium">Expected: Number of servings</Text>
-              <Text fontSize="sm">• Say a specific number (e.g., "4" or "4 servings")</Text>
-              <Text fontSize="sm">• Say "make it for X people"</Text>
-            </>
-          )}
-          
-          {currentState === "asking_substitution" && (
-            <>
-              <Text fontSize="sm" color="blue.600" fontWeight="medium">Ingredient Substitutions</Text>
-              <Text fontSize="sm">• Say the ingredient you want to substitute (e.g., "butter")</Text>
-              <Text fontSize="sm">• When options are shown, say the number (1, 2, or 3) to select</Text>
-              <Text fontSize="sm">• Say "no more substitutions" when done</Text>
-            </>
-          )}
-          
-          {currentState === "ready_to_cook" && (
-            <>
-              <Text fontSize="sm" color="blue.600" fontWeight="medium">Expected: Ready to start?</Text>
-              <Text fontSize="sm">• Say "yes" or "ready" to begin cooking</Text>
-              <Text fontSize="sm">• Say "no" or "wait" if you need more time</Text>
-            </>
-          )}
-          
-          {currentState === "cooking" && (
-            <>
-              <Text fontSize="sm" color="blue.600" fontWeight="medium">Cooking Mode</Text>
-              <Text fontSize="sm">• Say "start" to begin with the first step</Text>
-              <Text fontSize="sm">• Say "next" for next step</Text>
-              <Text fontSize="sm">• Say "repeat" to hear current step again</Text>
-              <Text fontSize="sm">• Say "start timer" when prompted for timed steps</Text>
-              <Text fontSize="sm">• Say "stop timer" to cancel the current timer</Text>
-              <Text fontSize="sm">• Say "finish" when you've completed all steps</Text>
-            </>
-          )}
+        {/* Input Section */}
+        <VStack spacing={2}>
+          <form onSubmit={handleTextSubmit} style={{ width: '100%' }}>
+            <InputGroup size="lg">
+              <Input
+                value={textInput}
+                onChange={(e) => setTextInput(e.target.value)}
+                placeholder="Type your command or question..."
+                pr="4.5rem"
+                disabled={isPlaying}
+              />
+              <InputRightElement width="4.5rem">
+                <IconButton
+                  h="1.75rem"
+                  size="sm"
+                  icon={<Icon as={FaPaperPlane} />}
+                  aria-label="Send message"
+                  type="submit"
+                  isDisabled={isPlaying || !textInput.trim()}
+                  colorScheme="blue"
+                />
+              </InputRightElement>
+            </InputGroup>
+          </form>
+
+          <Button
+            colorScheme="blue"
+            size="lg"
+            width="full"
+            onClick={isListening ? stopListening : startListening}
+            isDisabled={isPlaying}
+            leftIcon={isListening ? <Icon as={FaMicrophoneSlash} /> : <Icon as={FaMicrophone} />}
+          >
+            {isListening ? "Stop Listening" : "Start Listening"}
+          </Button>
         </VStack>
       </Box>
-    </VStack>
+
+      {/* Right Column - Status and Commands */}
+      <Box flex="1" h="100%" position="sticky" top={4}>
+        <VStack spacing={4} h="100%" align="stretch">
+          {/* Status Box */}
+          <Box p={4} bg="blue.50" borderRadius="lg" shadow="sm">
+            <Text fontSize="lg" fontWeight="bold" mb={2}>
+              Current State: {currentState.replace(/_/g, ' ').toUpperCase()}
+            </Text>
+            <Text fontSize="md" color="gray.600">
+              {isListening ? "Listening..." : isPlaying ? "Playing audio response..." : "Ready for voice input"}
+            </Text>
+            {(isListening || isPlaying) && (
+              <CircularProgress isIndeterminate size="40px" mt={2} color="blue.500" />
+            )}
+          </Box>
+
+          {/* Timer Display */}
+          {timeRemaining !== null && (
+            <Box 
+              p={4} 
+              bg={timeRemaining <= 20 ? "red.50" : "blue.50"} 
+              borderRadius="lg"
+              border="2px"
+              borderColor={timeRemaining <= 20 ? "red.500" : "blue.500"}
+              shadow="sm"
+            >
+              <Text fontSize="3xl" fontWeight="bold" color={timeRemaining <= 20 ? "red.500" : "blue.500"}>
+                {formatTime(timeRemaining)}
+              </Text>
+              {timeRemaining <= 20 && (
+                <Text color="red.500" fontSize="lg" mt={2}>
+                  Almost done! Get ready for the next step
+                </Text>
+              )}
+            </Box>
+          )}
+
+          {/* Voice Command Guide */}
+          <Box p={4} bg="gray.50" borderRadius="lg" border="1px" borderColor="gray.200" shadow="sm" flex="1" overflowY="auto">
+            <Text fontWeight="bold" mb={4} color="blue.600">Available Commands:</Text>
+            <VStack align="stretch" spacing={3}>
+              {currentState === "initial_summary" && (
+                <>
+                  <Text fontSize="sm" fontWeight="medium">Change serving size:</Text>
+                  <Text fontSize="sm">• "I want to make it for X people"</Text>
+                  <Text fontSize="sm">• "No" to keep current serving size</Text>
+                </>
+              )}
+              
+              {currentState === "asking_servings" && (
+                <>
+                  <Text fontSize="sm" fontWeight="medium">Specify servings:</Text>
+                  <Text fontSize="sm">• "4 servings"</Text>
+                  <Text fontSize="sm">• "Make it for X people"</Text>
+                </>
+              )}
+              
+              {currentState === "asking_substitution" && (
+                <>
+                  <Text fontSize="sm" fontWeight="medium">Ingredient substitutions:</Text>
+                  <Text fontSize="sm">• Name the ingredient to substitute</Text>
+                  <Text fontSize="sm">• Choose option by number (1-3)</Text>
+                  <Text fontSize="sm">• "No more substitutions"</Text>
+                </>
+              )}
+              
+              {currentState === "ready_to_cook" && (
+                <>
+                  <Text fontSize="sm" fontWeight="medium">Ready to begin?</Text>
+                  <Text fontSize="sm">• "Ready" to start cooking</Text>
+                  <Text fontSize="sm">• "Wait" if you need more time</Text>
+                </>
+              )}
+              
+              {currentState === "cooking" && (
+                <>
+                  <Text fontSize="sm" fontWeight="medium">Cooking commands:</Text>
+                  <Text fontSize="sm">• "Start" - Begin first step</Text>
+                  <Text fontSize="sm">• "Next" - Go to next step</Text>
+                  <Text fontSize="sm">• "Repeat" - Hear current step</Text>
+                  <Text fontSize="sm">• "Start timer" - Start step timer</Text>
+                  <Text fontSize="sm">• "Stop timer" - Cancel timer</Text>
+                  <Text fontSize="sm">• "Finish" - Complete recipe</Text>
+                  <Divider my={2} />
+                  <Text fontSize="sm" fontWeight="medium">Ask questions anytime:</Text>
+                  <Text fontSize="sm">• "What temperature?"</Text>
+                  <Text fontSize="sm">• "How do I know it's done?"</Text>
+                  <Text fontSize="sm">• "Can I substitute X?"</Text>
+                </>
+              )}
+            </VStack>
+          </Box>
+        </VStack>
+      </Box>
+    </HStack>
   )
 }
 
