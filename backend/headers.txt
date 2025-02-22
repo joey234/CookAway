@@ -1,0 +1,30 @@
+Note: Unnecessary use of -X or --request, POST is already inferred.
+* Host localhost:8000 was resolved.
+* IPv6: ::1
+* IPv4: 127.0.0.1
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0*   Trying [::1]:8000...
+* connect to ::1 port 8000 from ::1 port 51648 failed: Connection refused
+*   Trying 127.0.0.1:8000...
+* Connected to localhost (127.0.0.1) port 8000
+> POST /api/recipes/2d6fc78b-2462-4422-a296-33e6a2507020/voice-interaction HTTP/1.1
+> Host: localhost:8000
+> User-Agent: curl/8.7.1
+> Accept: */*
+> Content-Type: application/json
+> Content-Length: 113
+> 
+} [113 bytes data]
+* upload completely sent off: 113 bytes
+< HTTP/1.1 200 OK
+< date: Sat, 22 Feb 2025 06:05:05 GMT
+< server: uvicorn
+< x-next-state: ready_to_cook
+< access-control-expose-headers: X-Next-State, X-Updated-Recipe-Id
+< content-length: 183484
+< content-type: audio/mpeg
+< 
+{ [97992 bytes data]
+100  179k  100  179k  100   113   197k    124 --:--:-- --:--:-- --:--:--  197k100  179k  100  179k  100   113   197k    124 --:--:-- --:--:-- --:--:--  197k
+* Connection #0 to host localhost left intact
