@@ -399,7 +399,51 @@ class RecipeService:
         return recipe
 
     def get_recipe(self, recipe_id: str) -> Optional[Recipe]:
-        return self._recipes.get(recipe_id)
+        logger.info(f"Getting recipe with ID: {recipe_id}")
+        recipe = self._recipes.get(recipe_id)
+        if recipe:
+            logger.info(f"Found recipe: {recipe.title}")
+            logger.info(f"Original steps count: {len(recipe.steps)}")
+            logger.info(f"Original metadata: {recipe.metadata}")
+            
+            # Create a copy of the recipe to avoid modifying the original
+            recipe_copy = Recipe(
+                title=recipe.title,
+                metadata=recipe.metadata.copy(),
+                ingredients=recipe.ingredients.copy(),
+                steps=recipe.steps.copy(),  # Always copy steps
+                equipment=recipe.equipment.copy(),
+                id=recipe.id
+            )
+            
+            # Initialize step statuses if entering cooking state
+            current_state = recipe_copy.metadata.get("current_state", "initial_summary")
+            logger.info(f"Current state: {current_state}")
+            
+            # Always maintain steps in the recipe object
+            if current_state == "cooking":
+                logger.info("Recipe is in cooking state, initializing step statuses")
+                if "step_statuses" not in recipe_copy.metadata:
+                    recipe_copy.metadata["step_statuses"] = {
+                        str(i+1): "not_started" for i in range(len(recipe_copy.steps))
+                    }
+                    recipe_copy.metadata["step_statuses"]["1"] = "in_progress"
+                if "current_step" not in recipe_copy.metadata:
+                    recipe_copy.metadata["current_step"] = 1
+            elif current_state == "ready_to_cook":
+                logger.info("Recipe is in ready_to_cook state, keeping steps but marking as not started")
+                recipe_copy.metadata["step_statuses"] = {
+                    str(i+1): "not_started" for i in range(len(recipe_copy.steps))
+                }
+            else:
+                logger.info(f"Recipe is in {current_state} state, steps will be filtered in API response")
+            
+            logger.info(f"Final steps count: {len(recipe_copy.steps)}")
+            logger.info(f"Final metadata: {recipe_copy.metadata}")
+            return recipe_copy
+            
+        logger.error(f"Recipe not found: {recipe_id}")
+        return None
 
     def list_recipes(self) -> List[Recipe]:
         return list(self._recipes.values())

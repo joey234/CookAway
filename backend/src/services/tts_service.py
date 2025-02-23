@@ -307,10 +307,11 @@ class TTSService:
 
     def get_llm_cooking_guidance(self, context: Dict) -> str:
         """Get cooking guidance from Mistral based on context."""
-        # Format the current step data nicely
-        current_step_info = ""
-        if context['current_step_data']:
-            current_step_info = f"""Current instruction: {context['current_step_data'].get('instruction', '')}
+        try:
+            # Format the current step data nicely
+            current_step_info = ""
+            if context['current_step_data']:
+                current_step_info = f"""Current instruction: {context['current_step_data'].get('instruction', '')}
 
 Visual checkpoints to look for:
 {self._format_list(context['current_step_data'].get('checkpoints', []))}
@@ -324,31 +325,50 @@ Helpful tips:
 Timer information:
 {self._format_timer(context['current_step_data'].get('timer', {}))}"""
 
-        # Add photo analysis results if available
-        photo_analysis = ""
-        if context.get('photo_analysis'):
-            photo_analysis = f"""
-PHOTO ANALYSIS RESULTS:
-Visual characteristics detected:
-{self._format_list(context['photo_analysis'].get('visual_characteristics', []))}
+            # Format available parallel tasks
+            parallel_tasks_info = ""
+            if context['available_tasks']:
+                parallel_tasks_info = "\nAvailable parallel tasks:\n" + "\n".join(
+                    f"• Step {task['step_number']}: {task['instruction']} "
+                    f"(estimated time: {task['estimated_time'] // 60}m {task['estimated_time'] % 60}s)"
+                    for task in context['available_tasks']
+                )
 
-Potential issues identified:
-{self._format_list(context['photo_analysis'].get('potential_issues', []))}
+            # Format completed steps with their status
+            completed_steps_info = "\nCompleted steps: " + (
+                ", ".join(f"Step {step}" for step in context['completed_steps'])
+                if context['completed_steps'] else "None"
+            )
 
-Matching expected characteristics:
-{self._format_list(context['photo_analysis'].get('matching_expectations', []))}
-"""
+            # Special handling for timer start requests
+            user_input_lower = context['user_input'].lower()
+            if user_input_lower in ['yes', 'yeah', 'sure', 'okay', 'ok'] and context['current_step_data'] and context['current_step_data'].get('timer'):
+                duration = context['current_step_data']['timer']['duration']
+                minutes = duration // 60
+                seconds = duration % 60
+                time_str = []
+                if minutes:
+                    time_str.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+                if seconds:
+                    time_str.append(f"{seconds} second{'s' if seconds != 1 else ''}")
+                
+                response = f"Starting a timer for {' and '.join(time_str)}."
+                if context['available_tasks']:
+                    response += " While we wait, you can:\n"
+                    for task in context['available_tasks']:
+                        response += f"• Step {task['step_number']}: {task['instruction']} "
+                        response += f"(estimated time: {task['estimated_time'] // 60}m {task['estimated_time'] % 60}s)\n"
+                return f"{response}\nSYSTEM_ACTION: START_TIMER:{context['current_step']}"
 
-        # Construct a detailed prompt for Mistral that can handle any cooking situation
-        prompt = f"""You are an expert cooking assistant helping someone prepare {context['recipe_title']}. 
-You have deep knowledge of cooking techniques, troubleshooting, and food science.
-You can help with any cooking question or problem, whether it's about the current step, ingredients, techniques, or fixing mistakes.
-
-CURRENT COOKING CONTEXT:
-- Step {context['current_step']} of {context['total_steps']}
+            # Construct a detailed prompt for Mistral that includes action instructions
+            prompt = f"""CURRENT COOKING CONTEXT:
+Step {context['current_step']} of {context['total_steps']}
 {current_step_info}
 
-{photo_analysis if photo_analysis else ""}
+RECIPE STATE:
+- Timer running: {context['timer_running']}
+{completed_steps_info}
+{parallel_tasks_info}
 
 RECIPE RESOURCES:
 Available ingredients:
@@ -360,47 +380,67 @@ Equipment being used:
 Previous steps (for context):
 {self._format_previous_steps(context['all_steps'], context['current_step'])}
 
-USER'S QUESTION/ISSUE:
-{context['question']}
+USER'S INPUT:
+{context['user_input']}
 
-GUIDANCE INSTRUCTIONS:
-1. First, acknowledge the user's question/concern to show you understand their situation
-2. If analyzing a photo:
-   - Comment on how well it matches the expected state for this step
-   - Point out any positive aspects you notice
-   - Identify any potential issues that need attention
-   - Provide specific advice if adjustments are needed
-   - Confirm if they're ready to move to the next step
-3. If they're having a problem (like too much salt, burning, etc.):
-   - Explain what might have happened
-   - Provide multiple solutions if possible, starting with the easiest fix
-   - Explain how to prevent this issue in the future
-4. If they're asking about a technique or concept:
-   - Explain it clearly with analogies if helpful
-   - Provide visual or sensory cues they can look for
-   - Mention relevant equipment or ingredients from their recipe
-5. If they're unsure about timing or doneness:
-   - Give them specific indicators to check for
-   - Explain what "done" should look like/feel like/smell like
-   - Provide tips for testing doneness
-6. Always:
-   - Keep the response conversational and encouraging
-   - Reference specific ingredients and equipment they have
-   - Relate advice to their current step when relevant
-   - Offer to repeat or clarify any part of the guidance
-   - End with a question to check if they need more help
+As a cooking assistant, guide the user through the recipe. For each response:
+1. If the user says "start" and no step is active:
+   - Provide the first step's instructions
+   - Include SYSTEM_ACTION: START_COOKING
 
-Remember: Your goal is to help them succeed in cooking this dish, no matter what challenges they encounter."""
+2. If the user asks a question:
+   - Provide a clear, helpful answer
+   - No system action needed unless explicitly requested
 
-        try:
+3. If the user indicates completion ("done", "finished", etc.):
+   - Confirm completion
+   - Include SYSTEM_ACTION: MARK_COMPLETED:X (where X is the step number)
+   - List any newly available tasks
+   - Suggest the next step
+
+4. If the user wants to start a timer:
+   - Confirm timer start
+   - Include SYSTEM_ACTION: START_TIMER:X (where X is the step number)
+   - Suggest parallel tasks if available
+
+5. If a timer is running and the user asks what to do:
+   - List available parallel tasks
+   - Provide guidance on current step progress
+
+6. If all steps are completed:
+   - Congratulate the user
+   - Include SYSTEM_ACTION: FINISH_COOKING
+
+Format your response as:
+[Conversational response to user]
+SYSTEM_ACTION: [ACTION_TYPE:step_number] (if needed)"""
+
             # Use Mistral to get the response
             from services.mistral_service import get_mistral_response
-            response = get_mistral_response(prompt)
+            logger.info("Sending prompt to Mistral:\n%s", prompt)
+            response = get_mistral_response(prompt, context)
+            logger.info("Raw response from Mistral:\n%s", response)
+            
+            # Validate response format
+            if "SYSTEM_ACTION:" not in response and context['user_input'].lower() == "start":
+                # If user says "start" and we don't get a proper response, force the START_COOKING action
+                return (
+                    "Let's begin cooking! I'll guide you through each step.\n\n"
+                    f"Step 1: {context['all_steps'][0]['instruction']}\n"
+                    "Would you like me to start a timer for this step?\n"
+                    "SYSTEM_ACTION: START_COOKING"
+                )
+            
             return response
+
         except Exception as e:
             logger.error(f"Error getting Mistral response: {e}")
-            return ("I apologize, but I'm having trouble processing your question right now. "
-                   "Would you like me to repeat the current step while I resolve this issue?")
+            # Return a properly formatted error response
+            return (
+                "I apologize, but I'm having trouble processing your request right now. "
+                "Let me repeat the current step for you.\n"
+                "SYSTEM_ACTION: NEXT_STEP"
+            )
 
     def _format_list(self, items: List[str]) -> str:
         """Format a list of items with bullet points."""

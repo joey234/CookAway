@@ -170,7 +170,7 @@ class ParallelTaskService:
         logger.info(f"Checking if task {task.step_number} is available during step {current_step}")
         
         # Task must not be completed or in progress
-        if task.status != TaskStatus.NOT_STARTED:
+        if task.status in [TaskStatus.COMPLETED, TaskStatus.IN_PROGRESS]:
             logger.info(f"Task {task.step_number} is not available: status is {task.status}")
             return False
             
@@ -179,15 +179,15 @@ class ParallelTaskService:
             logger.info(f"Task {task.step_number} is not available: takes too long ({task.estimated_time}s) for remaining time ({remaining_time}s)")
             return False
             
-        # Special case: During water boiling (step 1), always allow step 2
-        if current_step == 1 and task.step_number == 2:
+        # Special case: During water boiling (step 1), always allow step 2 if not completed or in progress
+        if current_step == 1 and task.step_number == 2 and task.status == TaskStatus.NOT_STARTED:
             logger.info(f"Task 2 is available during water boiling (step 1)")
             return True
             
         # Special case: During pasta cooking (step 3)
         if current_step == 3:
             # For step 4 (heating oil), just check if step 3 is active
-            if task.step_number == 4:
+            if task.step_number == 4 and task.status == TaskStatus.NOT_STARTED:
                 logger.info("Step 4 (heating oil) is available during pasta cooking")
                 return True
                 
@@ -267,9 +267,14 @@ class ParallelTaskService:
             logger.info("Analyzing recipe steps for parallel tasks")
             self.analyze_recipe_for_parallel_tasks(self.recipe_steps)
         
-        # Log available tasks at timer start
+        # Log available tasks at timer start without marking them as completed
         available = self.get_available_parallel_tasks(step_number, float('inf'))
         logger.info(f"Available tasks at timer start: {available}")
+        
+        # Mark only the timer step as in progress
+        if step_number in self.parallel_tasks:
+            self.parallel_tasks[step_number].status = TaskStatus.IN_PROGRESS
+            logger.info(f"Marked step {step_number} as in progress")
 
     def end_timer_period(self):
         """End the current timer period and determine next steps."""
@@ -483,4 +488,31 @@ class ParallelTaskService:
         other_terms = self._extract_key_terms(other_step['instruction'])
         
         # Check for any term overlap that might indicate a dependency
-        return bool(set(step_terms) & set(other_terms)) 
+        return bool(set(step_terms) & set(other_terms))
+
+    def mark_step_completed(self, step_number):
+        """Mark a task as completed and check for next available steps."""
+        logger.info(f"Marking step {step_number} as completed")
+        
+        if step_number in self.parallel_tasks:
+            self.parallel_tasks[step_number].status = TaskStatus.COMPLETED
+            logger.info(f"Updated parallel task {step_number} status to COMPLETED")
+            
+        if step_number not in self._completed_steps:
+            self._completed_steps.append(step_number)
+            logger.info(f"Added step {step_number} to completed steps. Current completed steps: {self._completed_steps}")
+        
+        # If this was a timer step, clear the timer state
+        if step_number == self.current_timer_step:
+            logger.info(f"Completed timer step {step_number}, clearing timer state")
+            self.current_timer_step = None
+            self.active_timer_step = None
+            self.timer_start_time = None
+        
+        # Check for any steps that can now be started
+        available_tasks = self.get_available_parallel_tasks(
+            self.current_timer_step if self.current_timer_step else step_number,
+            float('inf')
+        )
+        logger.info(f"Available tasks after completing step {step_number}: {available_tasks}")
+        return available_tasks 

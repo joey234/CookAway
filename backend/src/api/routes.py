@@ -62,17 +62,38 @@ def init_router(
 
     @router.get("/recipes/{recipe_id}", response_model=RecipeOutput)
     async def get_recipe(recipe_id: str):
+        logger.info(f"Getting recipe with ID: {recipe_id}")
         recipe = recipe_service.get_recipe(recipe_id)
         if not recipe:
+            logger.error(f"Recipe not found: {recipe_id}")
             raise HTTPException(status_code=404, detail="Recipe not found")
-        return RecipeOutput(
-            id=recipe.id,
-            title=recipe.title,
-            metadata=recipe.metadata,
-            ingredients=recipe.ingredients,
-            steps=recipe.steps,
-            equipment=recipe.equipment
-        )
+        
+        # Get the current state from metadata
+        current_state = recipe.metadata.get("current_state", "initial_summary")
+        logger.info(f"Current recipe state: {current_state}")
+        logger.info(f"Recipe steps count before filtering: {len(recipe.steps)}")
+        
+        # Determine if we should include steps in the response
+        include_steps = current_state in ["cooking", "ready_to_cook"]
+        has_made_substitutions = recipe.metadata.get("has_made_substitutions", False)
+        is_servings_adjusted = recipe.metadata.get("servings_adjusted", False)
+        
+        logger.info(f"Step inclusion check: state={current_state}, has_subs={has_made_substitutions}, servings_adjusted={is_servings_adjusted}")
+        
+        # Create the response with or without steps based on state and workflow
+        response_data = {
+            "id": recipe.id,
+            "title": recipe.title,
+            "metadata": recipe.metadata,
+            "ingredients": recipe.ingredients,
+            "steps": recipe.steps if include_steps else [],
+            "equipment": recipe.equipment
+        }
+        
+        logger.info(f"Response steps count: {len(response_data['steps'])}")
+        logger.info(f"Response metadata: {response_data['metadata']}")
+        
+        return RecipeOutput(**response_data)
 
     @router.post("/recipes/{recipe_id}/summary/audio")
     async def get_recipe_summary_audio(recipe_id: str):
@@ -155,21 +176,28 @@ def init_router(
                 response_data, next_state = None, voice_input.current_state
                 
                 if voice_input.current_state == ConversationState.INITIAL_SUMMARY:
-                    audio_data, response_text = tts_service.generate_recipe_summary(recipe.__dict__, voice_input.current_state)
+                    # Skip audio generation, just get text
+                    response_text = f"Let's cook {recipe.title}! How many servings would you like to make?"
                     next_state = ConversationState.ASKING_SERVINGS
                 else:
                     if voice_input.current_state == ConversationState.ASKING_SERVINGS:
-                        audio_data, response_text = tts_service.generate_voice_response(
-                            "How many servings would you like to make?",
-                            voice_input.current_state
-                        )
+                        response_text = "How many servings would you like to make?"
                     elif voice_input.current_state == ConversationState.ASKING_SUBSTITUTION:
-                        audio_data, response_text = tts_service.generate_voice_response(
-                            "Do you need to substitute any ingredients? If yes, please tell me which ingredient.",
-                            voice_input.current_state
-                        )
+                        response_text = "Do you need to substitute any ingredients? If yes, please tell me which ingredient."
                     elif voice_input.current_state == ConversationState.READY_TO_COOK:
-                        audio_data, response_text = tts_service.generate_recipe_summary(recipe.__dict__, voice_input.current_state)
+                        # Format ingredients and equipment list
+                        response_text = "Here's what you'll need:\n\nIngredients:\n"
+                        for ing in recipe.ingredients:
+                            response_text += f"- {ing['amount']} {ing['unit']} {ing['item']}"
+                            if ing.get('notes'):
+                                response_text += f" ({ing['notes']})"
+                            response_text += "\n"
+                        
+                        response_text += "\nEquipment:\n"
+                        for item in recipe.equipment:
+                            response_text += f"- {item}\n"
+                        
+                        response_text += "\nDo you have everything ready? Say 'ready' when you want to start cooking."
                 
                 # Create a summary for headers
                 header_summary = create_header_summary(response_text)
@@ -182,15 +210,15 @@ def init_router(
                     "Access-Control-Expose-Headers": "X-Next-State, X-Updated-Recipe-Id, X-Response-Text, X-Full-Response, X-Response-Text-Encoded"
                 }
                 
-                return Response(
-                    content=audio_data,
-                    media_type="audio/mpeg",
-                    headers=headers
-                )
+                # Return text response instead of audio
+                return {
+                    "text": response_text,
+                    "headers": headers
+                }
 
             # Handle normal voice interaction based on current state
             if voice_input.current_state in [ConversationState.INITIAL_SUMMARY, ConversationState.ASKING_SERVINGS]:
-                audio_data, response_text, next_state, updated_recipe = voice_interaction_service.process_servings_request(
+                _, response_text, next_state, updated_recipe = voice_interaction_service.process_servings_request(
                     voice_input.transcript,
                     recipe.__dict__
                 )
@@ -212,7 +240,7 @@ def init_router(
                 }
 
             elif voice_input.current_state == ConversationState.ASKING_SUBSTITUTION:
-                audio_data, response_text, next_state, updated_recipe, substitutions = voice_interaction_service.process_substitution_request(
+                _, response_text, next_state, updated_recipe, substitutions = voice_interaction_service.process_substitution_request(
                     voice_input.transcript,
                     recipe.__dict__
                 )
@@ -239,21 +267,29 @@ def init_router(
                     headers["X-Substitution-Options"] = make_header_safe(substitutions_json)
 
             elif voice_input.current_state == ConversationState.READY_TO_COOK:
-                audio_data, response_text, next_state = voice_interaction_service.process_ready_to_cook(voice_input.transcript)
+                _, response_text, next_state, updated_recipe = voice_interaction_service.process_ready_to_cook(
+                    voice_input.transcript,
+                    recipe.__dict__
+                )
+                
+                if updated_recipe:
+                    updated_recipe = recipe_service.create_recipe(**updated_recipe)
+                    recipe_id = updated_recipe.id
                 
                 # Create a summary for headers
                 header_summary = create_header_summary(response_text)
                 
                 headers = {
                     "X-Next-State": next_state,
+                    "X-Updated-Recipe-Id": recipe_id if updated_recipe else None,
                     "X-Response-Text": make_header_safe(header_summary),
                     "X-Full-Response": make_header_safe(response_text),
                     "X-Response-Text-Encoded": "true",
-                    "Access-Control-Expose-Headers": "X-Next-State, X-Response-Text, X-Full-Response, X-Response-Text-Encoded"
+                    "Access-Control-Expose-Headers": "X-Next-State, X-Updated-Recipe-Id, X-Response-Text, X-Full-Response, X-Response-Text-Encoded"
                 }
 
             elif voice_input.current_state == ConversationState.COOKING:
-                audio_data, response_text, next_state, updated_recipe, timer_data = voice_interaction_service.process_cooking_step(
+                _, response_text, next_state, updated_recipe, timer_data = voice_interaction_service.process_cooking_step(
                     voice_input.transcript,
                     recipe.__dict__
                 )
@@ -277,11 +313,11 @@ def init_router(
                 if timer_data:
                     headers["X-Timer-Data"] = make_header_safe(json.dumps(timer_data))
 
-            return Response(
-                content=audio_data,
-                media_type="audio/mpeg",
-                headers=headers
-            )
+            # Return text response instead of audio
+            return {
+                "text": response_text,
+                "headers": headers
+            }
         
         except Exception as e:
             logger.exception("Error processing voice interaction")

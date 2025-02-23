@@ -23,13 +23,17 @@ import {
   Progress,
   Heading,
   Grid,
+  Circle,
 } from '@chakra-ui/react'
 import axios from 'axios'
 import { FaMicrophone, FaMicrophoneSlash, FaPaperPlane, FaCheckCircle, FaClock, FaListUl, FaArrowRight, FaCircle } from 'react-icons/fa'
+import { API_BASE_URL } from '../config'
+import { ConversationState } from '../types'
 
 interface VoiceInteractionProps {
   recipeId: string
   onRecipeUpdate?: (newRecipeId: string) => void
+  onStateChange?: (state: ConversationState) => void
 }
 
 type ConversationState = 
@@ -87,8 +91,9 @@ declare global {
 
 interface TimerData {
     duration: number;
-    type: string;
     step: number;
+    type: string;
+    step_statuses?: Record<string, string>;
     warning_time: number;
     parallel_tasks?: Array<{
         step_number: number;
@@ -126,6 +131,7 @@ interface StepsDashboardProps {
   timeRemaining: number | null;
   completedSteps: number[];
   activeParallelSteps: number[];
+  stepStatuses: Record<string, string>;
 }
 
 interface ParallelTask {
@@ -265,145 +271,108 @@ const StepsDashboard: React.FC<StepsDashboardProps> = ({
   currentStep,
   timeRemaining,
   completedSteps,
-  activeParallelSteps
+  activeParallelSteps,
+  stepStatuses
 }) => {
   return (
     <Box
       bg="white"
-      borderTop="1px solid"
-      borderColor="gray.200"
-      boxShadow="0 -4px 6px -1px rgba(0, 0, 0, 0.1)"
+      borderRadius="md"
+      boxShadow="sm"
       p={4}
-      minHeight="300px"
-      maxHeight="40vh"
+      h="100%"
       overflowY="auto"
+      css={{
+        '&::-webkit-scrollbar': {
+          width: '4px',
+        },
+        '&::-webkit-scrollbar-track': {
+          width: '6px',
+        },
+        '&::-webkit-scrollbar-thumb': {
+          background: 'gray.200',
+          borderRadius: '24px',
+        },
+      }}
     >
-      <Box maxW="1400px" mx="auto" w="100%">
-        <Text fontSize="lg" fontWeight="bold" mb={4}>
-          Recipe Progress
-        </Text>
-        <VStack spacing={4} align="stretch">
-          {steps.map((step) => {
-            const isCurrentStep = step.step === currentStep;
-            const hasTimer = step.timer && timeRemaining !== null && isCurrentStep;
-            const timerProgress = hasTimer
-              ? ((step.timer!.duration - timeRemaining!) / step.timer!.duration) * 100
-              : 0;
-            const isWarning = hasTimer && timeRemaining! <= 20;
-
-            return (
-              <Box
-                key={step.step}
-                p={4}
-                borderRadius="md"
-                bg={
-                  completedSteps.includes(step.step)
-                    ? "green.100"
-                    : isCurrentStep
-                    ? "blue.100"
-                    : "white"
-                }
-                border="1px solid"
-                borderColor={
-                  completedSteps.includes(step.step)
-                    ? "green.200"
-                    : isCurrentStep
-                    ? "blue.200"
-                    : "gray.200"
-                }
-                boxShadow="sm"
-                position="relative"
-                opacity={completedSteps.includes(step.step) ? 0.7 : 1}
-              >
-                {/* Status indicator */}
-                <Box
-                  position="absolute"
-                  left={-2}
-                  top="50%"
-                  transform="translateY(-50%)"
-                  w={1}
-                  h="80%"
-                  bg={
-                    completedSteps.includes(step.step)
-                      ? "green.500"
-                      : isCurrentStep
-                      ? "blue.500"
-                      : "gray.200"
-                  }
-                  borderRadius="full"
-                />
-
-                <HStack spacing={4} align="flex-start">
-                  {/* Step number */}
-                  <Box
-                    minW="40px"
-                    h="40px"
-                    borderRadius="full"
-                    bg={
-                      completedSteps.includes(step.step)
-                        ? "green.500"
-                        : isCurrentStep
-                        ? "blue.500"
-                        : "gray.200"
-                    }
-                    color="white"
-                    display="flex"
-                    alignItems="center"
-                    justifyContent="center"
-                    fontSize="lg"
-                    fontWeight="bold"
-                  >
-                    {step.step}
-                  </Box>
-
-                  <VStack spacing={2} align="stretch" flex={1}>
-                    {/* Step instruction */}
-                    <Text
-                      fontSize="md"
-                      color={completedSteps.includes(step.step) ? "gray.600" : "gray.800"}
-                    >
-                      {step.instruction}
-                    </Text>
-
-                    {/* Timer display */}
-                    {hasTimer && (
-                      <Box>
-                        <HStack spacing={2} mb={1}>
-                          <Icon as={FaClock} color={isWarning ? "red.500" : "blue.500"} />
-                          <Text color={isWarning ? "red.600" : "blue.600"} fontWeight="bold">
-                            {Math.floor(timeRemaining! / 60)}:
-                            {(timeRemaining! % 60).toString().padStart(2, "0")}
-                          </Text>
-                        </HStack>
-                        <Progress
-                          value={timerProgress}
-                          size="sm"
-                          colorScheme={isWarning ? "red" : "blue"}
-                          borderRadius="full"
-                          hasStripe
-                          isAnimated
-                        />
-                      </Box>
-                    )}
-
-                    {/* Estimated time */}
-                    {step.estimated_time && !hasTimer && (
-                      <Text fontSize="sm" color="gray.500">
-                        Est: {Math.floor(step.estimated_time / 60)}m {step.estimated_time % 60}s
-                      </Text>
-                    )}
-                  </VStack>
-
-                  {/* Completion indicator */}
-                  {completedSteps.includes(step.step) && (
-                    <Icon as={FaCheckCircle} color="green.500" boxSize={6} />
-                  )}
+      <Text fontSize="xl" fontWeight="bold" mb={4}>Recipe Progress</Text>
+      <VStack spacing={4} align="stretch">
+        {steps.map((step, index) => {
+          const stepNumber = index + 1;
+          const status = stepStatuses[stepNumber] || 'not_started';
+          const isActive = stepNumber === currentStep;
+          const isCompleted = completedSteps.includes(stepNumber);
+          const isParallel = activeParallelSteps.includes(stepNumber);
+          const hasTimer = step.timer?.duration;
+          const isTimerRunning = timeRemaining !== null && hasTimer;
+          
+          let statusColor = 'gray.50';  // default for not started
+          let statusIcon = '⚪';  // default circle
+          
+          if (status === 'completed') {
+            statusColor = 'green.50';
+            statusIcon = '✓';
+          } else if (status === 'in_progress' || (isTimerRunning && stepNumber === currentStep)) {
+            statusColor = 'yellow.50';
+            statusIcon = '⏳';
+          } else if (isActive || isParallel) {
+            statusColor = 'blue.50';
+            statusIcon = '▶';
+          }
+          
+          return (
+            <Box
+              key={stepNumber}
+              p={4}
+              borderRadius="md"
+              bg={statusColor}
+              border="1px solid"
+              borderColor={status === 'completed' ? 'green.200' : status === 'in_progress' ? 'yellow.200' : isActive || isParallel ? 'blue.200' : 'gray.200'}
+              position="relative"
+            >
+              <VStack spacing={3} align="stretch">
+                <HStack spacing={3}>
+                  <Circle size="24px" bg="white" border="1px solid" borderColor={status === 'completed' ? 'green.200' : status === 'in_progress' ? 'yellow.200' : isActive || isParallel ? 'blue.200' : 'gray.200'}>
+                    <Text fontSize="sm">{statusIcon}</Text>
+                  </Circle>
+                  <Text>
+                    <Text as="span" fontWeight="bold">Step {stepNumber}:</Text>{' '}
+                    {step.instruction}
+                  </Text>
                 </HStack>
-              </Box>
-            );
-          })}
-        </VStack>
-      </Box>
+                
+                {isTimerRunning && stepNumber === currentStep && (
+                  <Box bg={status === 'in_progress' ? 'yellow.100' : 'blue.100'} p={3} borderRadius="md">
+                    <HStack justify="space-between" mb={2}>
+                      <Text fontSize="sm" fontWeight="medium">Timer:</Text>
+                      <Text fontSize="sm" fontWeight="bold">
+                        {Math.floor(timeRemaining / 60)}:{(timeRemaining % 60).toString().padStart(2, '0')}
+                      </Text>
+                    </HStack>
+                    <Progress
+                      value={(1 - timeRemaining / step.timer!.duration) * 100}
+                      size="sm"
+                      colorScheme={status === 'in_progress' ? 'yellow' : 'blue'}
+                      hasStripe
+                      isAnimated
+                      borderRadius="full"
+                    />
+                    <Text fontSize="xs" color="gray.600" mt={1}>
+                      {Math.round((1 - timeRemaining / step.timer!.duration) * 100)}% complete
+                    </Text>
+                  </Box>
+                )}
+                
+                {isParallel && (
+                  <Badge colorScheme="blue" variant="subtle" alignSelf="flex-start">
+                    Parallel Task
+                  </Badge>
+                )}
+              </VStack>
+            </Box>
+          );
+        })}
+      </VStack>
     </Box>
   );
 };
@@ -494,7 +463,7 @@ const MessageBubble: React.FC<{message: Message}> = ({message}) => {
   );
 };
 
-const VoiceInteraction: React.FC<VoiceInteractionProps> = ({ recipeId: initialRecipeId, onRecipeUpdate }) => {
+const VoiceInteraction: React.FC<VoiceInteractionProps> = ({ recipeId: initialRecipeId, onRecipeUpdate, onStateChange }) => {
   const [isListening, setIsListening] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentState, setCurrentState] = useState<ConversationState>("initial_summary")
@@ -515,6 +484,9 @@ const VoiceInteraction: React.FC<VoiceInteractionProps> = ({ recipeId: initialRe
   const [activeParallelSteps, setActiveParallelSteps] = useState<number[]>([]);
   const [recipeSteps, setRecipeSteps] = useState<Step[]>([]);
   const [currentStepNumber, setCurrentStepNumber] = useState<number>(0);
+  const [stepStatuses, setStepStatuses] = useState<Record<string, string>>({});
+  const [isLoading, setIsLoading] = useState(false);
+  const [lastResponse, setLastResponse] = useState('');
 
   // Scroll to bottom of messages
   const scrollToBottom = () => {
@@ -745,13 +717,41 @@ const VoiceInteraction: React.FC<VoiceInteractionProps> = ({ recipeId: initialRe
     }
   }, [messages]);
 
-  // Get recipe steps when recipe ID changes
+  // Get recipe steps when entering cooking state
   useEffect(() => {
     const getRecipeSteps = async () => {
       try {
-        console.log('Fetching recipe steps for ID:', currentRecipeId);
+        console.log('Fetching recipe steps:', {
+          recipeId: currentRecipeId,
+          currentState,
+          isInitialized: isInitializedRef.current
+        });
+        
         const response = await axios.get(`http://localhost:8000/api/recipes/${currentRecipeId}`);
+        console.log('Recipe API response:', {
+          steps: response.data.steps?.length || 0,
+          metadata: response.data.metadata,
+          state: response.data.metadata?.current_state
+        });
+        
         const steps = response.data.steps;
+        const metadata = response.data.metadata || {};
+        
+        // Update step statuses from metadata
+        if (metadata.step_statuses) {
+          console.log('Updating step statuses:', metadata.step_statuses);
+          setStepStatuses(metadata.step_statuses);
+        } else {
+          console.log('No step statuses in metadata');
+        }
+        
+        // Update current step from metadata
+        if (metadata.current_step) {
+          console.log('Updating current step to:', metadata.current_step);
+          setCurrentStepNumber(metadata.current_step);
+        } else {
+          console.log('No current step in metadata');
+        }
         
         // Process steps to ensure parallel_with arrays are properly set
         const processedSteps = steps.map((step: Step) => {
@@ -774,7 +774,10 @@ const VoiceInteraction: React.FC<VoiceInteractionProps> = ({ recipeId: initialRe
           };
         });
         
-        console.log('Processed steps:', processedSteps);
+        console.log('Setting recipe steps:', {
+          count: processedSteps.length,
+          steps: processedSteps
+        });
         setRecipeSteps(processedSteps);
         
         // Initialize parallel tasks with the recipe steps
@@ -799,10 +802,20 @@ const VoiceInteraction: React.FC<VoiceInteractionProps> = ({ recipeId: initialRe
       }
     };
     
-    if (currentRecipeId) {
+    if (currentRecipeId && (currentState === "cooking" || currentState === "ready_to_cook")) {
+      console.log('Triggering getRecipeSteps:', {
+        currentState,
+        currentRecipeId
+      });
       getRecipeSteps();
+    } else {
+      console.log('Not fetching recipe steps:', {
+        currentState,
+        currentRecipeId,
+        hasId: !!currentRecipeId
+      });
     }
-  }, [currentRecipeId]);
+  }, [currentRecipeId, currentState]);
 
   // Update current step when receiving a response
   useEffect(() => {
@@ -811,6 +824,31 @@ const VoiceInteraction: React.FC<VoiceInteractionProps> = ({ recipeId: initialRe
       const stepMatch = lastMessage.content.match(/Step (\d+):/);
       if (stepMatch) {
         setCurrentStepNumber(parseInt(stepMatch[1]));
+      }
+    }
+  }, [messages]);
+
+  // Update the useEffect that handles messages
+  useEffect(() => {
+    if (messages.length > 0) {
+      const lastMessage = messages[messages.length - 1];
+      const timer = lastMessage.timer;
+      
+      if (timer && typeof timer.step === 'number') {
+        // Update step statuses if provided
+        if (timer.step_statuses) {
+          setStepStatuses(prev => ({
+            ...prev,
+            ...timer.step_statuses,
+            [timer.step]: 'in_progress' // Ensure the timer step is marked as in_progress
+          }));
+        } else {
+          // If no step statuses provided, at least mark the timer step as in_progress
+          setStepStatuses(prev => ({
+            ...prev,
+            [timer.step]: 'in_progress'
+          }));
+        }
       }
     }
   }, [messages]);
@@ -1127,100 +1165,112 @@ const VoiceInteraction: React.FC<VoiceInteractionProps> = ({ recipeId: initialRe
     }
   }
 
-  return (
-    <Grid
-      h="100vh"
-      templateColumns="120px 1fr"
-      templateRows="1fr auto auto"
-    >
-      {/* Voice Commands Sidebar */}
-      <Box
-          bg="gray.50"
-        p={4}
-        borderRight="1px"
-        borderColor="gray.200"
-        overflowY="auto"
-        gridRow="1 / -1"
-      >
-        <VStack spacing={4} align="start">
-          <Text fontSize="sm" fontWeight="bold" color="gray.600">
-            Voice Commands
-          </Text>
-          <VStack spacing={2} align="start" w="100%">
-            {voiceCommands.map((command, index) => (
-              <Text
-                key={index}
-                fontSize="xs"
-                color="gray.600"
-                noOfLines={2}
-              >
-                {command}
-                  </Text>
-            ))}
-          </VStack>
-        </VStack>
-                </Box>
+  const handleTimerData = (timerData: any) => {
+    // Handle timer data implementation
+    console.log('Timer data received:', timerData);
+  };
 
-      {/* Main Content Area */}
-      <Box overflowY="auto" p={8} bg="white">
-        <Box maxW="1400px" mx="auto">
-          <VStack spacing={6} align="stretch" w="100%">
-            {messages.map((message) => (
-              <MessageBubble key={message.id} message={message} />
+  return (
+    <Grid templateColumns="1fr 400px" gap={4} h="100vh" p={4}>
+      <Box>
+          <VStack spacing={4} align="stretch">
+          <Box bg="white" p={4} borderRadius="md" boxShadow="sm">
+            <HStack justify="space-between" align="center" mb={4}>
+              <Text fontSize="lg" fontWeight="bold">Conversation</Text>
+              <HStack>
+                {isPlaying && (
+                  <Badge colorScheme="green" variant="subtle" p={2}>
+                    <HStack spacing={2}>
+                      <Circle size="8px" bg="green.500" />
+                      <Text>Playing Audio</Text>
+                    </HStack>
+                  </Badge>
+                )}
+                <Button
+                  onClick={isListening ? stopListening : startListening}
+                  colorScheme={isListening ? "red" : "blue"}
+                  size="sm"
+                  leftIcon={isListening ? <FaMicrophoneSlash /> : <FaMicrophone />}
+                  isDisabled={isPlaying}
+                >
+                  {isListening ? "Stop" : "Start"} Listening
+                </Button>
+              </HStack>
+            </HStack>
+
+            <Box
+              h="calc(100vh - 350px)"
+              overflowY="auto"
+              css={{
+                '&::-webkit-scrollbar': { width: '4px' },
+                '&::-webkit-scrollbar-track': { width: '6px' },
+                '&::-webkit-scrollbar-thumb': {
+                  background: 'gray.200',
+                  borderRadius: '24px',
+                },
+              }}
+            >
+              <VStack spacing={4} align="stretch">
+                {messages.map((message) => (
+                  <MessageBubble key={message.id} message={message} />
             ))}
             <div ref={messagesEndRef} />
           </VStack>
-        </Box>
+            </Box>
         </Box>
 
-      {/* Input Controls */}
-      <Box
-        bg="white"
-        borderTop="1px"
-        borderColor="gray.200"
-        p={4}
-        gridColumn="2"
-      >
-        <Box maxW="1400px" mx="auto">
-          <form onSubmit={handleTextSubmit}>
-            <HStack spacing={4}>
+          <Box bg="white" p={4} borderRadius="md" boxShadow="sm">
+            <form onSubmit={handleTextSubmit}>
+              <VStack spacing={3}>
+            <InputGroup size="lg">
               <Input
                 value={textInput}
                 onChange={(e) => setTextInput(e.target.value)}
-                placeholder="Type your message..."
-                size="lg"
+                    placeholder="Type your command or message..."
+                pr="4.5rem"
               />
-          <Button
-            colorScheme="blue"
-            size="lg"
-                type="submit"
-          >
-                Send
-          </Button>
-              <IconButton
-                aria-label="Toggle microphone"
-                icon={isListening ? <FaMicrophoneSlash /> : <FaMicrophone />}
-                onClick={isListening ? stopListening : startListening}
-                colorScheme={isListening ? "red" : "blue"}
-                size="lg"
-              />
-            </HStack>
-          </form>
-      </Box>
-          </Box>
+              <InputRightElement width="4.5rem">
+                    <Button
+                  h="1.75rem"
+                  size="sm"
+                  colorScheme="blue"
+                      type="submit"
+                    >
+                      Send
+                    </Button>
+              </InputRightElement>
+            </InputGroup>
 
-      {/* Steps Dashboard */}
-      <Box gridColumn="2">
-        <StepsDashboard
-          steps={recipeSteps}
-          currentStep={currentStepNumber}
-          timeRemaining={timeRemaining}
-          completedSteps={completedSteps}
-          activeParallelSteps={activeParallelSteps}
-        />
+                <Box w="100%" p={3} bg="gray.50" borderRadius="md">
+                  <Text fontSize="sm" fontWeight="medium" mb={2}>Available Commands:</Text>
+                  <Grid templateColumns="repeat(2, 1fr)" gap={2}>
+                    {voiceCommands.map((command, index) => (
+                      <Text key={index} fontSize="sm" color="gray.600">
+                        • {command}
+            </Text>
+                    ))}
+                  </Grid>
+          </Box>
+            </VStack>
+            </form>
+          </Box>
+        </VStack>
+      </Box>
+
+      <Box>
+        {(currentState === "cooking" || currentState === "ready_to_cook") && (
+          <StepsDashboard
+            steps={recipeSteps}
+            currentStep={currentStepNumber}
+            timeRemaining={timeRemaining}
+            completedSteps={completedSteps}
+            activeParallelSteps={activeParallelSteps}
+            stepStatuses={stepStatuses}
+          />
+        )}
       </Box>
     </Grid>
-  )
-}
+  );
+};
 
 export default VoiceInteraction 
