@@ -304,3 +304,143 @@ class TTSService:
             summary = "I'm ready to guide you through the cooking steps. Let me know when you want to begin."
             
         return summary 
+
+    def get_llm_cooking_guidance(self, context: Dict) -> str:
+        """Get cooking guidance from Mistral based on context."""
+        # Format the current step data nicely
+        current_step_info = ""
+        if context['current_step_data']:
+            current_step_info = f"""Current instruction: {context['current_step_data'].get('instruction', '')}
+
+Visual checkpoints to look for:
+{self._format_list(context['current_step_data'].get('checkpoints', []))}
+
+Common mistakes to watch out for:
+{self._format_list(context['current_step_data'].get('warnings', []))}
+
+Helpful tips:
+{self._format_list(context['current_step_data'].get('notes', []))}
+
+Timer information:
+{self._format_timer(context['current_step_data'].get('timer', {}))}"""
+
+        # Add photo analysis results if available
+        photo_analysis = ""
+        if context.get('photo_analysis'):
+            photo_analysis = f"""
+PHOTO ANALYSIS RESULTS:
+Visual characteristics detected:
+{self._format_list(context['photo_analysis'].get('visual_characteristics', []))}
+
+Potential issues identified:
+{self._format_list(context['photo_analysis'].get('potential_issues', []))}
+
+Matching expected characteristics:
+{self._format_list(context['photo_analysis'].get('matching_expectations', []))}
+"""
+
+        # Construct a detailed prompt for Mistral that can handle any cooking situation
+        prompt = f"""You are an expert cooking assistant helping someone prepare {context['recipe_title']}. 
+You have deep knowledge of cooking techniques, troubleshooting, and food science.
+You can help with any cooking question or problem, whether it's about the current step, ingredients, techniques, or fixing mistakes.
+
+CURRENT COOKING CONTEXT:
+- Step {context['current_step']} of {context['total_steps']}
+{current_step_info}
+
+{photo_analysis if photo_analysis else ""}
+
+RECIPE RESOURCES:
+Available ingredients:
+{self._format_ingredients_list(context['ingredients'])}
+
+Equipment being used:
+{', '.join(context['equipment'])}
+
+Previous steps (for context):
+{self._format_previous_steps(context['all_steps'], context['current_step'])}
+
+USER'S QUESTION/ISSUE:
+{context['question']}
+
+GUIDANCE INSTRUCTIONS:
+1. First, acknowledge the user's question/concern to show you understand their situation
+2. If analyzing a photo:
+   - Comment on how well it matches the expected state for this step
+   - Point out any positive aspects you notice
+   - Identify any potential issues that need attention
+   - Provide specific advice if adjustments are needed
+   - Confirm if they're ready to move to the next step
+3. If they're having a problem (like too much salt, burning, etc.):
+   - Explain what might have happened
+   - Provide multiple solutions if possible, starting with the easiest fix
+   - Explain how to prevent this issue in the future
+4. If they're asking about a technique or concept:
+   - Explain it clearly with analogies if helpful
+   - Provide visual or sensory cues they can look for
+   - Mention relevant equipment or ingredients from their recipe
+5. If they're unsure about timing or doneness:
+   - Give them specific indicators to check for
+   - Explain what "done" should look like/feel like/smell like
+   - Provide tips for testing doneness
+6. Always:
+   - Keep the response conversational and encouraging
+   - Reference specific ingredients and equipment they have
+   - Relate advice to their current step when relevant
+   - Offer to repeat or clarify any part of the guidance
+   - End with a question to check if they need more help
+
+Remember: Your goal is to help them succeed in cooking this dish, no matter what challenges they encounter."""
+
+        try:
+            # Use Mistral to get the response
+            from services.mistral_service import get_mistral_response
+            response = get_mistral_response(prompt)
+            return response
+        except Exception as e:
+            logger.error(f"Error getting Mistral response: {e}")
+            return ("I apologize, but I'm having trouble processing your question right now. "
+                   "Would you like me to repeat the current step while I resolve this issue?")
+
+    def _format_list(self, items: List[str]) -> str:
+        """Format a list of items with bullet points."""
+        if not items:
+            return "None provided"
+        return "\n".join(f"• {item}" for item in items)
+
+    def _format_timer(self, timer: Dict) -> str:
+        """Format timer information."""
+        if not timer or 'duration' not in timer:
+            return "No timer for this step"
+        
+        duration = timer['duration']
+        minutes = duration // 60
+        seconds = duration % 60
+        time_str = []
+        if minutes:
+            time_str.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+        if seconds:
+            time_str.append(f"{seconds} second{'s' if seconds != 1 else ''}")
+        
+        return f"This step takes {' and '.join(time_str)}"
+
+    def _format_ingredients_list(self, ingredients: List[Dict]) -> str:
+        """Format ingredients list for the prompt."""
+        return "\n".join(
+            f"- {ingredient.get('amount', '')} {ingredient.get('unit', '')} {ingredient['item']}"
+            for ingredient in ingredients
+        )
+
+    def _format_previous_steps(self, steps: List[Dict], current_step: int) -> str:
+        """Format relevant previous steps for context."""
+        if current_step <= 1:
+            return "No previous steps."
+        
+        # Include up to 2 previous steps for context
+        start_step = max(0, current_step - 3)
+        relevant_steps = steps[start_step:current_step-1]
+        
+        return "\n".join(
+            f"Step {i+start_step+1}: {step['instruction']}"
+            for i, step in enumerate(relevant_steps)
+        ) 

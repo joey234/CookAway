@@ -23,6 +23,8 @@ class RecipeStep(BaseModel):
     instruction: str
     timer: Optional[dict] = None
     checkpoints: Optional[List[str]] = None
+    parallel_with: Optional[List[int]] = []
+    estimated_time: Optional[int] = None
 
 class RecipeOutput(BaseModel):
     id: str

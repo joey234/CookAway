@@ -10,6 +10,7 @@ from services.recipe_service import RecipeService
 from services.voice_interaction_service import VoiceInteractionService
 from services.substitution_service import SubstitutionService
 from services.recipe_parser_service import RecipeParserService
+from services.parallel_task_service import ParallelTaskService
 from api.routes import init_router
 
 # Configure logging
@@ -31,7 +32,13 @@ tts_service = TTSService()
 recipe_parser_service = RecipeParserService(mistral_client)
 recipe_service = RecipeService(recipe_parser_service)
 substitution_service = SubstitutionService(mistral_client)
-voice_interaction_service = VoiceInteractionService(tts_service, recipe_service, substitution_service)
+parallel_task_service = ParallelTaskService()
+voice_interaction_service = VoiceInteractionService(
+    tts_service=tts_service,
+    recipe_service=recipe_service,
+    substitution_service=substitution_service,
+    parallel_task_service=parallel_task_service
+)
 
 app = FastAPI(title="CookAway API", version="1.0.0")
 

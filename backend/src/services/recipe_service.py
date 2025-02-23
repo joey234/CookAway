@@ -37,6 +37,8 @@ class RecipeStep(BaseModel):
     checkpoints: Optional[List[str]] = Field(None, description="Visual/sensory checkpoints")
     warnings: Optional[List[str]] = Field(None, description="Common mistakes to avoid")
     notes: Optional[List[str]] = Field(None, description="Helpful tips and techniques")
+    parallel_with: Optional[List[int]] = Field([], description="Step numbers that can be done in parallel with this step")
+    estimated_time: Optional[int] = Field(None, description="Estimated time in seconds this step will take")
 
 class RecipeIngredient(BaseModel):
     item: str = Field(description="Ingredient name")
@@ -113,11 +115,29 @@ class RecipeService:
                     ],
                     "notes": [
                         "Use at least 4 quarts of water per pound of pasta",
-                        "The water should taste like sea water - about 1-2 tablespoons of salt per pound of pasta"
+                        "The water should taste like sea water"
                     ]
                 },
                 {
                     "step": 2,
+                    "instruction": "While waiting for water to boil, chop garlic and parsley.",
+                    "parallel_with": [1],  # Can be done during step 1's timer
+                    "estimated_time": 120,  # 2 minutes
+                    "checkpoints": [
+                        "Garlic should be thinly sliced",
+                        "Parsley should be finely chopped"
+                    ],
+                    "warnings": [
+                        "Don't make garlic pieces too thick",
+                        "Keep garlic slices even in size"
+                    ],
+                    "notes": [
+                        "A sharp knife will make this easier",
+                        "Stack parsley leaves before chopping"
+                    ]
+                },
+                {
+                    "step": 3,
                     "instruction": "Add pasta to the boiling water and cook until al dente.",
                     "timer": {"duration": 480, "type": "cooking"},  # 8 minutes
                     "checkpoints": [
@@ -126,92 +146,96 @@ class RecipeService:
                         "Pasta should be firm but not hard when bitten"
                     ],
                     "warnings": [
-                        "Don't break the pasta - it will cook down naturally",
-                        "Don't add oil to the water - it prevents sauce from sticking later",
-                        "Don't overcook - pasta should have a slight bite"
+                        "Don't break the pasta",
+                        "Don't add oil to the water",
+                        "Don't overcook"
                     ],
                     "notes": [
                         "Stir occasionally to prevent sticking",
-                        "Test by biting a piece - it should be slightly firm in the center",
-                        "Different pasta shapes may need different cooking times"
-                    ]
-                },
-                {
-                    "step": 3,
-                    "instruction": "While pasta cooks, heat olive oil in a large pan over medium heat. Add sliced garlic and red pepper flakes.",
-                    "timer": {"duration": 120, "type": "cooking"},  # 2 minutes
-                    "checkpoints": [
-                        "Garlic should turn golden, not brown",
-                        "If garlic browns, it will become bitter",
-                        "Oil should be shimmering but not smoking"
-                    ],
-                    "warnings": [
-                        "Don't let garlic burn - it becomes bitter",
-                        "Don't heat oil until smoking - it will be too hot",
-                        "Don't crowd the pan with garlic"
-                    ],
-                    "notes": [
-                        "Use a wide pan to distribute heat evenly",
-                        "Keep garlic slices even in thickness for uniform cooking",
-                        "Adjust red pepper flakes to your preferred spice level"
+                        "Test by biting a piece"
                     ]
                 },
                 {
                     "step": 4,
-                    "instruction": "Reserve 1 cup of pasta water, then drain pasta.",
+                    "instruction": "While pasta cooks, heat olive oil in a large pan over medium heat.",
+                    "parallel_with": [3],  # Can be done during step 3's timer
+                    "estimated_time": 60,  # 1 minute
                     "checkpoints": [
-                        "Don't forget to save the pasta water",
-                        "Pasta should still be very hot",
-                        "Don't rinse the pasta"
+                        "Oil should be shimmering but not smoking"
                     ],
                     "warnings": [
-                        "Don't forget to reserve pasta water before draining",
-                        "Don't rinse the pasta - it removes the starch needed for sauce",
-                        "Don't let pasta sit in the colander too long"
+                        "Don't let oil get too hot",
+                        "Keep an eye on the heat level"
                     ],
                     "notes": [
-                        "The starchy pasta water helps create a silky sauce",
-                        "Work quickly to keep pasta hot",
-                        "Have your colander ready in the sink before draining"
+                        "Use a wide pan to distribute heat evenly"
                     ]
                 },
                 {
                     "step": 5,
-                    "instruction": "Add pasta to the pan with garlic oil. Toss well. Add some pasta water if needed.",
-                    "timer": {"duration": 60, "type": "cooking"},  # 1 minute
+                    "instruction": "Add sliced garlic and red pepper flakes to the heated oil.",
+                    "parallel_with": [3],  # Can also be done during step 3's timer
+                    "estimated_time": 120,  # 2 minutes
                     "checkpoints": [
-                        "Pasta should be well coated with oil",
-                        "Add pasta water gradually, 2-3 tablespoons at a time",
-                        "Sauce should cling to pasta"
+                        "Garlic should turn golden, not brown",
+                        "Oil should be fragrant with garlic"
                     ],
                     "warnings": [
-                        "Don't add too much pasta water at once",
-                        "Don't skip tossing - it helps distribute the flavors",
-                        "Don't let the pasta cool down too much"
+                        "Don't let garlic burn",
+                        "Keep stirring gently"
                     ],
                     "notes": [
-                        "Use tongs to toss pasta for better control",
-                        "The sauce should be silky, not watery",
-                        "Keep heat on medium-low while tossing"
+                        "Lower heat if garlic is browning too quickly",
+                        "Add red pepper flakes to taste"
                     ]
                 },
                 {
                     "step": 6,
-                    "instruction": "Finish with fresh parsley, toss once more, and serve immediately.",
+                    "instruction": "Reserve 1 cup of pasta water, then drain pasta.",
                     "checkpoints": [
-                        "Parsley should be fresh and bright green",
-                        "Pasta should be glossy with oil",
-                        "Serve while very hot"
+                        "Save pasta water before draining",
+                        "Pasta should still be very hot"
                     ],
                     "warnings": [
-                        "Don't add parsley too early - it will wilt",
-                        "Don't let the dish sit too long before serving",
+                        "Don't forget to reserve water",
+                        "Don't rinse the pasta"
+                    ],
+                    "notes": [
+                        "The starchy water helps create a silky sauce",
+                        "Have your measuring cup ready"
+                    ]
+                },
+                {
+                    "step": 7,
+                    "instruction": "Add pasta to the pan with garlic oil. Toss well, adding pasta water if needed.",
+                    "timer": {"duration": 60, "type": "cooking"},  # 1 minute
+                    "checkpoints": [
+                        "Pasta should be well coated with oil",
+                        "Sauce should cling to pasta"
+                    ],
+                    "warnings": [
+                        "Don't add too much pasta water",
+                        "Keep tossing to coat evenly"
+                    ],
+                    "notes": [
+                        "Add water gradually, 2-3 tablespoons at a time",
+                        "Keep heat on medium-low while tossing"
+                    ]
+                },
+                {
+                    "step": 8,
+                    "instruction": "Add chopped parsley, toss once more, and serve immediately.",
+                    "checkpoints": [
+                        "Parsley should be evenly distributed",
+                        "Pasta should be glossy with oil"
+                    ],
+                    "warnings": [
+                        "Don't let the dish sit too long",
                         "Don't skip the final toss"
                     ],
                     "notes": [
-                        "Chop parsley just before using for best flavor",
-                        "Have warm plates ready for serving",
-                        "Optional: add a drizzle of fresh olive oil on top"
+                        "Reserve some parsley for garnish",
+                        "Serve on warmed plates if possible"
                     ]
                 }
             ],
@@ -221,7 +245,8 @@ class RecipeService:
                 "Colander",
                 "Measuring cups and spoons",
                 "Sharp knife",
-                "Cutting board"
+                "Cutting board",
+                "Tongs or pasta server"
             ]
         )
         self._test_recipe_id = test_recipe.id  # Store the test recipe ID
@@ -314,6 +339,39 @@ class RecipeService:
                     step["warnings"] = None
                 if not step.get("notes"):
                     step["notes"] = None
+
+                # Initialize parallel_with and estimated_time if not present
+                if "parallel_with" not in step:
+                    step["parallel_with"] = []
+                elif isinstance(step["parallel_with"], str):
+                    # Handle case where parallel_with might be a comma-separated string
+                    try:
+                        step["parallel_with"] = [int(x.strip()) for x in step["parallel_with"].split(",")]
+                    except (ValueError, AttributeError):
+                        step["parallel_with"] = []
+
+                if "estimated_time" not in step:
+                    # Default estimated time based on complexity
+                    instruction = step["instruction"].lower()
+                    if any(word in instruction for word in ["quick", "just", "simply"]):
+                        step["estimated_time"] = 60  # 1 minute
+                    elif any(word in instruction for word in ["carefully", "precisely"]):
+                        step["estimated_time"] = 300  # 5 minutes
+                    else:
+                        step["estimated_time"] = 180  # 3 minutes default
+                elif isinstance(step["estimated_time"], str):
+                    # Handle case where estimated_time might be a string
+                    try:
+                        time_str = step["estimated_time"].lower()
+                        minutes = 0
+                        if "hour" in time_str:
+                            hours = float(re.findall(r'\d+', time_str)[0])
+                            minutes = hours * 60
+                        else:
+                            minutes = float(re.findall(r'\d+', time_str)[0])
+                        step["estimated_time"] = int(minutes * 60)  # Convert to seconds
+                    except (ValueError, IndexError, AttributeError):
+                        step["estimated_time"] = 180  # 3 minutes default
             
             # Ensure metadata has all required fields
             if "metadata" not in raw_recipe:
