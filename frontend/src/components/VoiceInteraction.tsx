@@ -27,13 +27,10 @@ import {
 } from '@chakra-ui/react'
 import axios from 'axios'
 import { FaMicrophone, FaMicrophoneSlash, FaPaperPlane, FaCheckCircle, FaClock, FaListUl, FaArrowRight, FaCircle } from 'react-icons/fa'
-import { API_BASE_URL } from '../config'
-import { ConversationState } from '../types'
 
 interface VoiceInteractionProps {
   recipeId: string
   onRecipeUpdate?: (newRecipeId: string) => void
-  onStateChange?: (state: ConversationState) => void
 }
 
 type ConversationState = 
@@ -463,7 +460,7 @@ const MessageBubble: React.FC<{message: Message}> = ({message}) => {
   );
 };
 
-const VoiceInteraction: React.FC<VoiceInteractionProps> = ({ recipeId: initialRecipeId, onRecipeUpdate, onStateChange }) => {
+const VoiceInteraction: React.FC<VoiceInteractionProps> = ({ recipeId: initialRecipeId, onRecipeUpdate }) => {
   const [isListening, setIsListening] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentState, setCurrentState] = useState<ConversationState>("initial_summary")
@@ -485,8 +482,6 @@ const VoiceInteraction: React.FC<VoiceInteractionProps> = ({ recipeId: initialRe
   const [recipeSteps, setRecipeSteps] = useState<Step[]>([]);
   const [currentStepNumber, setCurrentStepNumber] = useState<number>(0);
   const [stepStatuses, setStepStatuses] = useState<Record<string, string>>({});
-  const [isLoading, setIsLoading] = useState(false);
-  const [lastResponse, setLastResponse] = useState('');
 
   // Scroll to bottom of messages
   const scrollToBottom = () => {
@@ -1165,11 +1160,6 @@ const VoiceInteraction: React.FC<VoiceInteractionProps> = ({ recipeId: initialRe
     }
   }
 
-  const handleTimerData = (timerData: any) => {
-    // Handle timer data implementation
-    console.log('Timer data received:', timerData);
-  };
-
   return (
     <Grid templateColumns="1fr 400px" gap={4} h="100vh" p={4}>
       <Box>
@@ -1253,9 +1243,9 @@ const VoiceInteraction: React.FC<VoiceInteractionProps> = ({ recipeId: initialRe
           </Box>
             </VStack>
             </form>
+            </Box>
+            </VStack>
           </Box>
-        </VStack>
-      </Box>
 
       <Box>
         {(currentState === "cooking" || currentState === "ready_to_cook") && (

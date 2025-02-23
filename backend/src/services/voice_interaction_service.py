@@ -168,10 +168,22 @@ class VoiceInteractionService:
         if any(word in transcript_lower for word in ["yes", "yeah", "yep", "sure", "okay", "ready"]):
             # Add steps to recipe data when transitioning to cooking state
             recipe_dict["metadata"]["current_state"] = ConversationState.COOKING
-            audio_data, response_text = self.tts_service.generate_voice_response(
-                "Great! Let's begin cooking. I'll guide you through each step. Say 'start' to begin with step 1.",
-                ConversationState.COOKING
-            )
+            recipe_dict["metadata"]["current_step"] = 1
+            recipe_dict["metadata"]["completed_steps"] = []
+            recipe_dict["metadata"]["active_parallel_steps"] = []
+            recipe_dict["metadata"]["active_step"] = 1
+            
+            # Initialize step statuses with first step as in_progress
+            steps = recipe_dict.get("steps", [])
+            step_statuses = {str(i+1): "not_started" for i in range(len(steps))}
+            step_statuses["1"] = "in_progress"  # First step is now active
+            recipe_dict["metadata"]["step_statuses"] = step_statuses
+            
+            # Get first step guidance
+            first_step = steps[0]
+            response_text = self._build_step_guidance(first_step, 1)
+            
+            audio_data, response_text = self.tts_service.generate_voice_response(response_text, ConversationState.COOKING)
             response_text = response_text.encode('ascii', 'replace').decode('ascii')
             return audio_data, response_text, ConversationState.COOKING, recipe_dict
         elif any(word in transcript_lower for word in ["no", "nope", "nah", "wait", "not yet"]):
@@ -235,6 +247,78 @@ class VoiceInteractionService:
             # Initialize response_text with Mistral's base response
             response_text = response.split("SYSTEM_ACTION:")[0].strip()
             
+            # Check for step completion phrases
+            completion_phrases = [
+                "done", "finished", "ready", "complete", "completed",
+                "water is boiled", "water is boiling", "water boiled",
+                "timer finished", "timer done", "time is up"
+            ]
+            
+            # Get the active timer step data if there is one
+            active_timer_step = None
+            active_step = recipe_dict.get("metadata", {}).get("active_step")
+            if timer_running and active_step:
+                active_timer_step = steps[active_step - 1]
+            
+            # Check if the user's input matches the context of the timer step
+            is_water_boiling_step = False
+            if active_timer_step:
+                step_instruction = active_timer_step.get('instruction', '').lower()
+                is_water_boiling_step = any(word in step_instruction for word in ['boil', 'water'])
+            
+            # Check for completion based on context
+            should_complete_timer = False
+            if timer_running and active_timer_step:
+                if any(phrase in transcript.lower() for phrase in completion_phrases):
+                    # General completion phrases always work
+                    should_complete_timer = True
+                elif is_water_boiling_step and any(phrase in transcript.lower() for phrase in ["water is boiled", "water is boiling", "water boiled"]):
+                    # Water boiling phrases only work for water boiling steps
+                    should_complete_timer = True
+            
+            if should_complete_timer:
+                # Automatically stop the timer and mark step as completed
+                recipe_dict["metadata"]["timer_running"] = False
+                recipe_dict["metadata"]["active_step"] = None  # Clear active step
+                
+                # End timer period and get next step information
+                timer_end_data = self.parallel_task_service.end_timer_period()
+                recipe_dict["metadata"]["completed_steps"] = self.parallel_task_service.completed_steps
+                recipe_dict["metadata"]["active_parallel_steps"] = []
+                
+                # Update step statuses
+                step_statuses = recipe_dict.get("metadata", {}).get("step_statuses", {})
+                step_statuses[str(active_step)] = "completed"
+                recipe_dict["metadata"]["step_statuses"] = step_statuses
+                
+                # Get next main step from timer_end_data
+                next_main_step = timer_end_data.get('next_main_step')
+                if next_main_step:
+                    # Update current step
+                    recipe_dict["metadata"]["current_step"] = next_main_step
+                    step_statuses[str(next_main_step)] = "in_progress"
+                    
+                    # Build response with next step guidance
+                    next_step_data = steps[next_main_step - 1]
+                    response_text = f"Great! The water is boiling and step {active_step} is completed. Let's move on to step {next_main_step}: {next_step_data['instruction']}"
+                    
+                    # Add timer prompt if next step has a timer
+                    if next_step_data.get("timer"):
+                        response_text += "\nWould you like me to start a timer for this step?"
+                else:
+                    response_text = f"Great! Step {active_step} is completed."
+                    if len(recipe_dict["metadata"]["completed_steps"]) == len(steps):
+                        response_text += "\nCongratulations! You've completed all the steps. Your dish should be ready now."
+                
+                audio_data, response_text = self.tts_service.generate_voice_response(response_text, ConversationState.COOKING)
+                return audio_data, response_text, ConversationState.COOKING, recipe_dict, {
+                    "duration": 0,
+                    "type": "stop",
+                    "step": next_main_step or current_step,
+                    "warning_time": 0,
+                    "step_statuses": step_statuses
+                }
+            
             # Parse Mistral's response for actions
             if "SYSTEM_ACTION:" in response:
                 action_part = response.split("SYSTEM_ACTION:")[1].strip()
@@ -249,6 +333,12 @@ class VoiceInteractionService:
                         response_text = f"Cannot complete this step yet. {reason}"
                         audio_data, response_text = self.tts_service.generate_voice_response(response_text, ConversationState.COOKING)
                         return audio_data, response_text, ConversationState.COOKING, recipe_dict, None
+                    
+                    # Check if this is a timer step being completed
+                    step_data = steps[step_number - 1]
+                    is_timer_step = step_data.get("timer") is not None
+                    timer_running = recipe_dict.get("metadata", {}).get("timer_running", False)
+                    active_step = recipe_dict.get("metadata", {}).get("active_step")
                     
                     # Update completed steps and active parallel steps
                     available_tasks = self.parallel_task_service.mark_step_completed(step_number)
@@ -265,11 +355,41 @@ class VoiceInteractionService:
                         active_parallel_steps.remove(step_number)
                     recipe_dict["metadata"]["active_parallel_steps"] = active_parallel_steps
                     
-                    # Build response with available next tasks
-                    response_text = f"Great! Step {step_number} is completed. "
+                    # If this was a timer step, stop the timer only if there are no available parallel tasks
+                    if is_timer_step and timer_running and active_step == step_number:
+                        if not available_tasks:
+                            recipe_dict["metadata"]["timer_running"] = False
+                            recipe_dict["metadata"]["active_step"] = None
+                            timer_end_data = self.parallel_task_service.end_timer_period()
+                            recipe_dict["metadata"]["completed_steps"] = self.parallel_task_service.completed_steps
+                            response_text = f"Great! Step {step_number} is completed and the timer has been stopped."
+                        else:
+                            response_text = f"Great! Step {step_number} is completed. The timer will continue running for remaining tasks."
+                    else:
+                        response_text = f"Great! Step {step_number} is completed."
                     
+                    # Find the next main step
+                    next_main_step = None
+                    remaining_steps = []
+                    for i, step in enumerate(steps, 1):
+                        if i not in recipe_dict["metadata"]["completed_steps"] and i != step_number:
+                            remaining_steps.append(i)
+                            # If timer is running, only consider parallel tasks as next main step
+                            if timer_running and active_step:
+                                available_tasks = self.parallel_task_service.get_available_parallel_tasks(
+                                    active_step,
+                                    steps[active_step - 1]["timer"]["duration"]
+                                )
+                                if any(task['step_number'] == i for task in available_tasks):
+                                    next_main_step = i
+                                    break
+                            else:
+                                next_main_step = i
+                                break
+                    
+                    # Check available parallel tasks first
                     if available_tasks:
-                        response_text += f"\n\nAvailable next tasks:\n"
+                        response_text += "\nWhile waiting, you can work on these tasks:\n"
                         for task in available_tasks:
                             est_time = task["estimated_time"]
                             est_minutes = est_time // 60
@@ -279,7 +399,21 @@ class VoiceInteractionService:
                             # Mark available tasks as ready
                             step_statuses[str(task['step_number'])] = "not_started"
                     
-                    # Keep timer step as in_progress if timer is running
+                    # Guide to the next main step if available
+                    if remaining_steps:
+                        if next_main_step:
+                            next_step_data = steps[next_main_step - 1]
+                            response_text += f"\nLet's move on to step {next_main_step}: {next_step_data['instruction']}"
+                            if next_step_data.get("timer") and not timer_running:
+                                response_text += "\nWould you like me to start a timer for this step?"
+                            recipe_dict["metadata"]["current_step"] = next_main_step
+                            step_statuses[str(next_main_step)] = "in_progress"
+                        else:
+                            response_text += f"\nThere are still {len(remaining_steps)} steps remaining. Please complete the current timer step first."
+                    else:
+                        response_text += "\nCongratulations! You've completed all the steps. Your dish should be ready now."
+                    
+                    # Keep timer step as in_progress if timer is still running
                     timer_running = recipe_dict.get("metadata", {}).get("timer_running", False)
                     active_step = recipe_dict.get("metadata", {}).get("active_step")
                     if timer_running and active_step:
@@ -289,6 +423,7 @@ class VoiceInteractionService:
                             active_step,
                             timer_step_data["duration"]
                         )
+                        audio_data, response_text = self.tts_service.generate_voice_response(response_text, ConversationState.COOKING)
                         return audio_data, response_text, ConversationState.COOKING, recipe_dict, {
                             "duration": timer_step_data["duration"],
                             "type": timer_step_data["type"],
@@ -300,7 +435,8 @@ class VoiceInteractionService:
                     
                     audio_data, response_text = self.tts_service.generate_voice_response(response_text, ConversationState.COOKING)
                     return audio_data, response_text, ConversationState.COOKING, recipe_dict, {
-                        "step_statuses": step_statuses
+                        "step_statuses": step_statuses,
+                        "current_step": next_main_step
                     }
                 
                 elif "START_TIMER:" in action_part:
@@ -318,40 +454,99 @@ class VoiceInteractionService:
                     
                     # Update step statuses
                     step_statuses = recipe_dict.get("metadata", {}).get("step_statuses", {})
-                    step_statuses[str(step_number)] = "in_progress"
+                    step_statuses[str(step_number)] = "in_progress"  # Mark timer step as in progress
                     recipe_dict["metadata"]["step_statuses"] = step_statuses
                     
                     # Start timer and get available parallel tasks
                     self.parallel_task_service.start_timer_period(step_number)
                     
-                    # Mark available tasks as ready
+                    # Format response with timer and parallel tasks
+                    minutes = timer_data["duration"] // 60
+                    seconds = timer_data["duration"] % 60
+                    time_str = []
+                    if minutes:
+                        time_str.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+                    if seconds:
+                        time_str.append(f"{seconds} second{'s' if seconds != 1 else ''}")
+                    
+                    response_text = f"Starting a timer for {' and '.join(time_str)}. "
+                    
+                    # Sort available tasks by priority (prep tasks first, then by estimated time)
                     if timer_data.get("parallel_tasks"):
-                        for task in timer_data["parallel_tasks"]:
-                            step_statuses[str(task['step_number'])] = "not_started"
+                        available_tasks = sorted(
+                            timer_data["parallel_tasks"],
+                            key=lambda x: (
+                                0 if any(word in x['instruction'].lower() for word in ['chop', 'dice', 'slice', 'mince', 'prepare', 'cut']) else 1,
+                                x['estimated_time']
+                            )
+                        )
+                        # Automatically guide to the first available task
+                        next_task = available_tasks[0]
+                        est_time = next_task['estimated_time']
+                        est_minutes = est_time // 60
+                        est_seconds = est_time % 60
+                        est_time_str = f"{est_minutes}m {est_seconds}s" if est_minutes > 0 else f"{est_seconds}s"
+                        
+                        response_text += f"While the timer is running, let's move on to step {next_task['step_number']}: {next_task['instruction']} (estimated time: {est_time_str})"
+                        
+                        # Update recipe state for the parallel task
+                        recipe_dict["metadata"]["current_step"] = next_task['step_number']
+                        active_parallel_steps = recipe_dict.get("metadata", {}).get("active_parallel_steps", [])
+                        if next_task['step_number'] not in active_parallel_steps:
+                            active_parallel_steps.append(next_task['step_number'])
+                        recipe_dict["metadata"]["active_parallel_steps"] = active_parallel_steps
+                        
+                        # Update step statuses for parallel tasks
+                        step_statuses[str(next_task['step_number'])] = "in_progress"  # Mark first parallel task as in progress
+                        for task in available_tasks[1:]:
+                            step_statuses[str(task['step_number'])] = "not_started"  # Mark other parallel tasks as not started
                     
                     # Add step statuses to timer data
                     timer_data["step_statuses"] = step_statuses
                     
-                    audio_data, response_text = self.tts_service.generate_voice_response(message, ConversationState.COOKING)
+                    audio_data, response_text = self.tts_service.generate_voice_response(response_text, ConversationState.COOKING)
                     return audio_data, response_text, ConversationState.COOKING, recipe_dict, timer_data
                 
                 elif "STOP_TIMER" in action_part:
                     recipe_dict["metadata"]["timer_running"] = False
-                    # End timer period and update completed steps
+                    active_step = recipe_dict["metadata"].get("active_step")  # Get active step before clearing it
+                    recipe_dict["metadata"]["active_step"] = None  # Clear active step
+                    
+                    # End timer period and get next step information
                     timer_end_data = self.parallel_task_service.end_timer_period()
                     recipe_dict["metadata"]["completed_steps"] = self.parallel_task_service.completed_steps
                     recipe_dict["metadata"]["active_parallel_steps"] = []
+                    
                     # Update step statuses
                     step_statuses = recipe_dict.get("metadata", {}).get("step_statuses", {})
-                    active_step = recipe_dict["metadata"].get("active_step")
-                    if active_step:
+                    if active_step:  # Use the active_step we got earlier
                         step_statuses[str(active_step)] = "completed"
                     recipe_dict["metadata"]["step_statuses"] = step_statuses
+                    
+                    # Get next main step from timer_end_data
+                    next_main_step = timer_end_data.get('next_main_step')
+                    if next_main_step:
+                        # Update current step
+                        recipe_dict["metadata"]["current_step"] = next_main_step
+                        step_statuses[str(next_main_step)] = "in_progress"
+                        
+                        # Build response with next step guidance
+                        next_step_data = steps[next_main_step - 1]
+                        response_text = f"Timer completed! Step {active_step} is done. Let's move on to step {next_main_step}: {next_step_data['instruction']}"
+                        
+                        # Add timer prompt if next step has a timer
+                        if next_step_data.get("timer"):
+                            response_text += "\nWould you like me to start a timer for this step?"
+                    else:
+                        response_text = f"Timer completed! Step {active_step} is done."
+                        if len(recipe_dict["metadata"]["completed_steps"]) == len(steps):
+                            response_text += "\nCongratulations! You've completed all the steps. Your dish should be ready now."
+                    
                     audio_data, response_text = self.tts_service.generate_voice_response(response_text, ConversationState.COOKING)
                     return audio_data, response_text, ConversationState.COOKING, recipe_dict, {
                         "duration": 0,
                         "type": "stop",
-                        "step": current_step,
+                        "step": next_main_step or current_step,
                         "warning_time": 0,
                         "step_statuses": step_statuses
                     }
@@ -478,30 +673,39 @@ class VoiceInteractionService:
                     )
                 )
                 
+                # If there are parallel tasks available, automatically guide to the first one
                 if available_tasks:
-                    response_text += "\n\nWhile we wait, here are tasks you can work on:"
-                    
-                    # Add recommended task
-                    recommended = available_tasks[0]
-                    est_time = recommended['estimated_time']
+                    next_task = available_tasks[0]
+                    est_time = next_task['estimated_time']
                     est_str = f"{est_time // 60}m {est_time % 60}s" if est_time >= 60 else f"{est_time}s"
-                    response_text += f"\n\nRecommended: Step {recommended['step_number']}: {recommended['instruction']} (estimated time: {est_str})"
                     
-                    # Add other tasks
+                    # Update recipe state for the parallel task
+                    recipe_dict["metadata"]["current_step"] = next_task['step_number']
+                    active_parallel_steps = recipe_dict.get("metadata", {}).get("active_parallel_steps", [])
+                    if next_task['step_number'] not in active_parallel_steps:
+                        active_parallel_steps.append(next_task['step_number'])
+                    recipe_dict["metadata"]["active_parallel_steps"] = active_parallel_steps
+                    
+                    # Update step statuses
+                    step_statuses = recipe_dict.get("metadata", {}).get("step_statuses", {})
+                    step_statuses[str(next_task['step_number'])] = "in_progress"  # Mark first parallel task as in progress
+                    for task in available_tasks[1:]:
+                        step_statuses[str(task['step_number'])] = "not_started"  # Mark other parallel tasks as not started
+                    recipe_dict["metadata"]["step_statuses"] = step_statuses
+                    
+                    # Build response text based on the current step's context
+                    current_step_instruction = steps[current_step - 1].get('instruction', '').lower()
+                    if 'boil' in current_step_instruction and 'water' in current_step_instruction:
+                        response_text += f"\n\nWhile waiting for the water to boil, let's move on to step {next_task['step_number']}: {next_task['instruction']} (estimated time: {est_str})"
+                    else:
+                        response_text += f"\n\nWhile waiting for step {current_step}, let's move on to step {next_task['step_number']}: {next_task['instruction']} (estimated time: {est_str})"
+                    
                     if len(available_tasks) > 1:
-                        response_text += "\n\nOther tasks:"
+                        response_text += "\n\nOther tasks you can work on:"
                         for task in available_tasks[1:]:
                             est_time = task['estimated_time']
                             est_str = f"{est_time // 60}m {est_time % 60}s" if est_time >= 60 else f"{est_time}s"
                             response_text += f"\n• Step {task['step_number']}: {task['instruction']} (estimated time: {est_str})"
-                    
-                    response_text += "\n\nTo start any of these tasks, say 'start step X' or 'move to step X'."
-                    
-                    # Update step statuses
-                    step_statuses = recipe_dict.get("metadata", {}).get("step_statuses", {})
-                    for task in available_tasks:
-                        step_statuses[str(task['step_number'])] = "not_started"
-                    recipe_dict["metadata"]["step_statuses"] = step_statuses
                 
                 audio_data, response_text = self.tts_service.generate_voice_response(response_text, ConversationState.COOKING)
                 return audio_data, response_text, ConversationState.COOKING, recipe_dict, {
@@ -539,19 +743,17 @@ class VoiceInteractionService:
         if from_step < 1 or from_step > len(steps) or to_step < 1 or to_step > len(steps):
             return False, "Invalid step number"
 
-        # Can't move if current step has an active timer and next step isn't parallel
+        # If there's a timer running, check if the requested step is a parallel task
         if timer_running and active_step:
             available_tasks = self.parallel_task_service.get_available_parallel_tasks(
                 active_step,
                 steps[active_step - 1]["timer"]["duration"]
             )
             is_parallel = any(task['step_number'] == to_step for task in available_tasks)
-            if not is_parallel:
-                return False, f"Cannot move to step {to_step} while timer is running on step {active_step}"
-
-        # Check if current step is completed or can be completed
-        if from_step not in completed_steps and str(from_step) not in step_statuses.get("completed", []):
-            return False, f"Step {from_step} must be completed first"
+            
+            # Allow moving to parallel tasks or back to the timer step
+            if not is_parallel and to_step != active_step:
+                return False, f"Step {to_step} cannot be done while timer is running on step {active_step}. You can only work on parallel tasks or return to step {active_step}."
 
         # Check dependencies
         current_step_data = steps[to_step - 1]
@@ -585,13 +787,18 @@ class VoiceInteractionService:
         
         # Add timer information in a natural way
         if step_data.get("timer"):
-            duration = step_data["timer"]["duration"]
+            duration = int(step_data["timer"]["duration"])
             minutes = duration // 60
             seconds = duration % 60
-            time_str = f"{minutes} minutes" if minutes > 0 else f"{seconds} seconds"
+            time_str = []
+            if minutes > 0:
+                time_str.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+            if seconds > 0:
+                time_str.append(f"{seconds} second{'s' if seconds != 1 else ''}")
+            time_str = " and ".join(time_str) if time_str else "0 seconds"
             response += f" This will take about {time_str}. Would you like me to set a timer?"
         
-        return response 
+        return response
 
     def _can_complete_step(self, recipe_dict: Dict, step_number: int) -> Tuple[bool, str]:
         """
@@ -610,20 +817,21 @@ class VoiceInteractionService:
         
         step_data = steps[step_number - 1]
         
-        # If this is a timer step and timer is running
-        if step_data.get("timer") and timer_running and active_step == step_number:
-            return False, "Cannot complete step while timer is running"
-        
         # If this step is part of active parallel steps during a timer
         if timer_running and step_number in active_parallel_steps:
             # Allow completing parallel tasks
+            return True, ""
+        
+        # If this is a timer step and timer is running
+        if step_data.get("timer") and timer_running and active_step == step_number:
+            # Allow completing timer steps - timer will be stopped when completed
             return True, ""
         
         # If there's a timer running and this isn't the timer step or a parallel task
         if timer_running and active_step and active_step != step_number:
             return False, f"Cannot complete step {step_number} while timer is running on step {active_step}"
         
-        return True, "" 
+        return True, ""
 
     def _handle_timer_start(self, recipe_dict: Dict, step_number: int) -> Tuple[bool, str, Optional[Dict]]:
         """

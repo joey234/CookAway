@@ -280,8 +280,13 @@ class TTSService:
         equipment = recipe_data.get('equipment', [])
         
         if state == ConversationState.INITIAL_SUMMARY:
-            # Start with recipe name and directly ask for servings
-            summary = f"{title}! "
+            # Start with recipe name and details
+            servings = metadata.get('servings', 4)
+            prep_time = metadata.get('prepTime', '30 minutes')
+            cook_time = metadata.get('cookTime', '1 hour')
+            
+            summary = f"Let's make {title}! "
+            summary += f"This recipe serves {servings} and takes {prep_time} to prepare plus {cook_time} to cook. "
             summary += "How many servings would you like to make?"
             
         elif state == ConversationState.ASKING_SUBSTITUTION:
@@ -303,7 +308,7 @@ class TTSService:
         else:
             summary = "I'm ready to guide you through the cooking steps. Let me know when you want to begin."
             
-        return summary 
+        return summary
 
     def get_llm_cooking_guidance(self, context: Dict) -> str:
         """Get cooking guidance from Mistral based on context."""
